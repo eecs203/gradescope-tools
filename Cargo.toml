@@ -1,0 +1,5 @@
+[workspace]
+members = ["gradescope-api", "lib203", "gradescope-to-db"]
+
+[profile.dev.package.sqlx-macros]
+opt-level = 3

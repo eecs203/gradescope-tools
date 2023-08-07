@@ -1,0 +1,15 @@
+[package]
+name = "gradescope-to-db"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.71"
+dotenvy = "0.15.7"
+gradescope-api = { path = "../gradescope-api" }
+sqlx = { version = "0.7.1", features = [
+    "runtime-tokio",
+    "sqlite",
+    "tls-rustls",
+] }
+tokio = { version = "1.28.2", features = ["full"] }
