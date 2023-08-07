@@ -1,16 +1,10 @@
 [package]
-name = "gradescope-to-db"
+name = "notify-unmatched-pages"
 version = "0.1.0"
 edition = "2021"
-publish = false
 
 [dependencies]
 anyhow = "1.0.71"
 app-utils = { path = "../app-utils" }
 gradescope-api = { path = "../gradescope-api" }
-sqlx = { version = "0.7.1", features = [
-    "runtime-tokio",
-    "sqlite",
-    "tls-native-tls",
-] }
 tokio = { version = "1.28.2", features = ["full"] }

@@ -1,5 +1,11 @@
 [workspace]
-members = ["gradescope-api", "lib203", "gradescope-to-db"]
+members = [
+    "gradescope-api",
+    "lib203",
+    "app-utils",
+    "gradescope-to-db",
+    "notify-unmatched-pages",
+]
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
