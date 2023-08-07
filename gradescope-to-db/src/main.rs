@@ -1,12 +1,10 @@
 use anyhow::Result;
-use env::{db_url_from_env, init_from_env, InitFromEnv};
+use app_utils::{db_url_from_env, init_from_env, InitFromEnv};
 use gradescope_api::assignment::Assignment;
 use gradescope_api::client::{Auth, Client as GsConnection};
 use gradescope_api::course::Course;
 use gradescope_api::regrade::Regrade;
 use sqlx::SqlitePool;
-
-mod env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
