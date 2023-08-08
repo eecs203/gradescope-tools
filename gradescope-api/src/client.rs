@@ -10,6 +10,7 @@ use reqwest::redirect::Policy;
 use reqwest::{Client as HttpClient, RequestBuilder, Response};
 use scraper::{ElementRef, Html};
 use tokio::time::sleep;
+use tracing::{info, trace};
 use url::Url;
 
 use crate::assignment::{Assignment, AssignmentName};
@@ -62,7 +63,7 @@ impl<State: ClientState> Client<State> {
         sleep(Duration::from_millis(1000)).await;
 
         let url = gs_url(path);
-        println!("sending request to {url}");
+        info!(%url, "sending GS request");
 
         self.client.get(url)
     }
@@ -305,7 +306,7 @@ impl Client<Auth> {
             .await
             .context("export download failed")?
             .bytes_stream()
-            .inspect_ok(|bytes| println!("got chunk of {} bytes", bytes.len()))
+            .inspect_ok(|bytes| trace!(num_bytes = bytes.len(), "got byte chunk"))
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
             .into_async_read();
 

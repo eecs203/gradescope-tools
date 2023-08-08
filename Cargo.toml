@@ -6,6 +6,3 @@ members = [
     "gradescope-to-db",
     "notify-unmatched-pages",
 ]
-
-[profile.dev.package.sqlx-macros]
-opt-level = 3
