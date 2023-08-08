@@ -7,7 +7,7 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
-use reqwest::{Client as HttpClient, Response};
+use reqwest::{Client as HttpClient, RequestBuilder, Response};
 use scraper::{ElementRef, Html};
 use tokio::time::sleep;
 use url::Url;
@@ -58,14 +58,18 @@ impl<State: ClientState> Client<State> {
         Ok(Html::parse_document(&text))
     }
 
-    async fn get_gs_response(&self, path: &str) -> Result<Response> {
+    async fn get_gs_request(&self, path: &str) -> RequestBuilder {
         sleep(Duration::from_millis(1000)).await;
 
         let url = gs_url(path);
         println!("sending request to {url}");
 
-        self.client
-            .get(url)
+        self.client.get(url)
+    }
+
+    async fn get_gs_response(&self, path: &str) -> Result<Response> {
+        self.get_gs_request(path)
+            .await
             .send()
             .await
             .context("Gradescope request failed")?
@@ -81,9 +85,17 @@ impl Client<Init> {
     }
 
     pub async fn new(creds: Creds) -> Result<Self> {
+        let redirect_policy = Policy::custom(|attempt| {
+            if attempt.url().domain() == Some("www.gradescope.com") {
+                Policy::none().redirect(attempt)
+            } else {
+                Policy::default().redirect(attempt)
+            }
+        });
+
         let client = HttpClient::builder()
             .cookie_store(true)
-            .redirect(Policy::none())
+            .redirect(redirect_policy)
             .build()?;
 
         // init cookies
@@ -272,27 +284,28 @@ impl Client<Auth> {
     pub async fn export_submissions(&self, course: &Course, assignment: &Assignment) -> Result<()> {
         let review_grades_page = self
             .get_gs_html(&gs_review_grades_path(course, assignment))
-            .await?;
+            .await
+            .context("getting review grades")?;
 
         // TODO: before asking GS for an export, this link won't exist; ask for export in that case
         let export_download_a = review_grades_page
             .select(&BULK_EXPORT_A)
             .exactly_one()
             .map_err(|err_it| anyhow!("not exactly one export link: found {}", err_it.count()))?;
-        let export_download_url_text = export_download_a
+        let export_download_path = export_download_a
             .value()
             .attr("href")
             .context("missing href attribute")?;
-        let export_download_url = Url::parse(BASE_URL)?.join(export_download_url_text)?;
 
         let response = self
-            .client
-            .get(export_download_url)
+            .get_gs_request(export_download_path)
+            .await
             .timeout(Duration::from_secs(30 * 60))
             .send()
             .await
             .context("export download failed")?
             .bytes_stream()
+            .inspect_ok(|bytes| println!("got chunk of {} bytes", bytes.len()))
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
             .into_async_read();
 
