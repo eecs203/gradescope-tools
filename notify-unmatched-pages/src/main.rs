@@ -7,7 +7,8 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_zip().await
+    full_path().await
+    // load_zip().await
 }
 
 async fn full_path() -> Result<()> {
@@ -17,7 +18,10 @@ async fn full_path() -> Result<()> {
         course_name: _,
     } = init_from_env().await?;
 
-    let assignments = gradescope.get_assignments(&course).await?;
+    let assignments = gradescope
+        .get_assignments(&course)
+        .await
+        .context("could not get assignments")?;
     let homeworks = find_homeworks(&assignments);
 
     let hw_1 = homeworks
@@ -26,7 +30,10 @@ async fn full_path() -> Result<()> {
         .individual()
         .context("could not find Individual HW 1")?;
 
-    gradescope.export_submissions(&course, hw_1).await?;
+    gradescope
+        .export_submissions(&course, hw_1)
+        .await
+        .context("could not export submissions")?;
 
     Ok(())
 }
