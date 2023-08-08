@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use app_utils::{init_from_env, InitFromEnv};
+use app_utils::{init_from_env, init_tracing, InitFromEnv};
 use gradescope_api::export_submissions::read_zip;
 use lib203::homework::{find_homeworks, HwNumber};
 use tokio::fs::File;
@@ -7,6 +7,8 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
+
     full_path().await
     // load_zip().await
 }

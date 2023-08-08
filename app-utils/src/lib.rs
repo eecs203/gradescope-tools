@@ -4,6 +4,9 @@ use anyhow::Result;
 use dotenvy::dotenv;
 use gradescope_api::client::{Auth, Client};
 use gradescope_api::course::Course;
+use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{fmt, registry};
 
 pub async fn init_from_env() -> Result<InitFromEnv> {
     dotenv().unwrap();
@@ -34,4 +37,10 @@ pub fn db_url_from_env() -> String {
 
 fn course_name_from_env() -> String {
     env::var("COURSE_NAME").unwrap()
+}
+
+pub fn init_tracing() {
+    registry()
+        .with(fmt::layer().with_filter(LevelFilter::INFO))
+        .init();
 }
