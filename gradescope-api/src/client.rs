@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::io;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use futures::TryStreamExt;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
@@ -13,16 +15,17 @@ use url::Url;
 use crate::assignment::{Assignment, AssignmentName};
 use crate::course::{Course, Role};
 use crate::creds::Creds;
+use crate::export_submissions::read_zip;
 use crate::regrade::Regrade;
 use crate::types::{GraderName, Points, QuestionNumber, QuestionTitle, StudentName};
 use crate::util::*;
 
 macro_rules! selectors {
-    ($name:ident = $x:expr) => {
+    ($name:ident = $x:expr $(,)?) => {
         lazy_static! { static ref $name: scraper::Selector = scraper::Selector::parse($x).unwrap(); }
     };
 
-    ($name:ident = $x:expr, $($names:ident = $xs:expr),+) => {
+    ($name:ident = $x:expr, $($names:ident = $xs:expr),+ $(,)?) => {
         selectors! { $name = $x }
         selectors! {
             $($names = $xs),+
@@ -39,7 +42,8 @@ selectors! {
     ASSIGNMENT_ROW = "tr.js-assignmentTableAssignmentRow",
     TD = "td",
     A = "a",
-    REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr"
+    REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr",
+    BULK_EXPORT_A = ".js-bulkExportModalDownload",
 }
 
 pub struct Client<State: ClientState> {
@@ -263,6 +267,38 @@ impl Client<Auth> {
             url,
             completed,
         ))
+    }
+
+    pub async fn export_submissions(&self, course: &Course, assignment: &Assignment) -> Result<()> {
+        let review_grades_page = self
+            .get_gs_html(&gs_review_grades_path(course, assignment))
+            .await?;
+
+        // TODO: before asking GS for an export, this link won't exist; ask for export in that case
+        let export_download_a = review_grades_page
+            .select(&BULK_EXPORT_A)
+            .exactly_one()
+            .map_err(|err_it| anyhow!("not exactly one export link: found {}", err_it.count()))?;
+        let export_download_url_text = export_download_a
+            .value()
+            .attr("href")
+            .context("missing href attribute")?;
+        let export_download_url = Url::parse(BASE_URL)?.join(export_download_url_text)?;
+
+        let response = self
+            .client
+            .get(export_download_url)
+            .timeout(Duration::from_secs(30 * 60))
+            .send()
+            .await
+            .context("export download failed")?
+            .bytes_stream()
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+            .into_async_read();
+
+        read_zip(response).await?;
+
+        Ok(())
     }
 }
 

@@ -34,6 +34,14 @@ impl<Id, Gw> Pair<Id, Gw> {
         }
     }
 
+    pub fn individual(&self) -> Option<&Id> {
+        self.id.as_ref()
+    }
+
+    pub fn groupwork(&self) -> Option<&Gw> {
+        self.gw.as_ref()
+    }
+
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         match (&self.id, &self.gw) {
