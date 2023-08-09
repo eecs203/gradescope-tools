@@ -1,4 +1,4 @@
-use std::iter;
+use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
 use async_zip::base::read::stream::ZipFileReader;
@@ -40,10 +40,32 @@ impl SubmissionPdfReader {
         Ok(Self { file })
     }
 
-    pub fn unmatched_pages(&self) -> Result<()> {
-        let page_kinds: Vec<_> = self.page_kinds()?;
-        println!("kinds: {page_kinds:#?}");
-        Ok(())
+    pub fn question_matching(&self) -> Result<HashMap<MatchingState, Vec<QuestionNumber>>> {
+        let page_kinds = self.page_kinds()?;
+
+        let questions_by_matching = page_kinds
+            .into_iter()
+            .dedup()
+            .batching(|it| match it.next() {
+                Some(PageKind::StudentSubmission) => match it.next() {
+                    Some(PageKind::QuestionSummary(number)) => {
+                        // Submission(s), Summary => submission pages were matched to question
+                        Some((MatchingState::Matched, number))
+                    }
+                    None => None, // These pages aren't matched to a question; not a problem
+                    Some(PageKind::StudentSubmission) => {
+                        panic!("dedup should prevent submissions here")
+                    }
+                },
+                Some(PageKind::QuestionSummary(number)) => {
+                    // no submissions, Summary => no submission pages were matched to question
+                    Some((MatchingState::Unmatched, number))
+                }
+                None => None,
+            })
+            .into_group_map();
+
+        Ok(questions_by_matching)
     }
 
     fn page_kinds(&self) -> Result<Vec<PageKind>> {
@@ -53,14 +75,10 @@ impl SubmissionPdfReader {
             .try_collect()
             .context("cannot get page of PDF")?;
 
-        let (assignment_summary_pages, post_assignment_summary_pages) = self.split_pages(&pages)?;
+        let (_, post_assignment_summary_pages) = self.split_pages(&pages)?;
 
-        let assignment_summary_page_kinds =
-            self.assignment_summary_page_kinds(assignment_summary_pages);
-        let post_assignment_summary_page_kinds =
-            self.post_assignment_summary_page_kinds(post_assignment_summary_pages);
-        let page_kinds = assignment_summary_page_kinds
-            .chain(post_assignment_summary_page_kinds)
+        let page_kinds = self
+            .post_assignment_summary_page_kinds(post_assignment_summary_pages)
             .try_collect()?;
 
         Ok(page_kinds)
@@ -70,15 +88,6 @@ impl SubmissionPdfReader {
         let num_assignment_summary_pages = self.count_assignment_summary_pages(pages)?;
         let split = pages.split_at(num_assignment_summary_pages);
         Ok(split)
-    }
-
-    fn assignment_summary_page_kinds(
-        &self,
-        assignment_summary_pages: &[PageRc],
-    ) -> impl Iterator<Item = Result<PageKind>> {
-        iter::repeat(PageKind::AssignmentSummary)
-            .take(assignment_summary_pages.len())
-            .map(Ok)
     }
 
     fn post_assignment_summary_page_kinds<'a>(
@@ -204,11 +213,17 @@ impl SubmissionPdfReader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum MatchingState {
+    Matched,
+    Unmatched,
+}
+
+/// Kinds of pages after the assignment summary pages, which are the first few, listing the
+/// assignment's name, student's name, score (if graded), every question with its rubric, and how
+/// each question scored on its rubric (if graded).
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum PageKind {
-    /// The first few pages, listing the assignment's name, student's name, score (if graded), every
-    /// question with its rubric, and how each question scored on its rubric (if graded).
-    AssignmentSummary,
     /// One page summarizing a single question (or part). Contains the same information about the
     /// question as the assignment summary, but just for the one question.
     ///

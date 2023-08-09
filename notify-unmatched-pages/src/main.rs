@@ -51,12 +51,22 @@ async fn load_zip() -> Result<()> {
 async fn load_pdf() -> Result<()> {
     let matched_data = fs::read("out/example_matched.pdf").await?;
     let unmatched_data = fs::read("out/example_unmatched.pdf").await?;
+    let mixed_data = fs::read("out/example_mixed.pdf").await?;
 
-    println!("matched:");
-    SubmissionPdfReader::new(matched_data)?.unmatched_pages()?;
+    println!(
+        "matched: {:#?}",
+        SubmissionPdfReader::new(matched_data)?.question_matching()?
+    );
 
-    println!("unmatched:");
-    SubmissionPdfReader::new(unmatched_data)?.unmatched_pages()?;
+    println!(
+        "unmatched: {:#?}",
+        SubmissionPdfReader::new(unmatched_data)?.question_matching()?
+    );
+
+    println!(
+        "mixed: {:#?}",
+        SubmissionPdfReader::new(mixed_data)?.question_matching()?
+    );
 
     Ok(())
 }
