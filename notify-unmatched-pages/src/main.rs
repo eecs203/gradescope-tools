@@ -1,16 +1,17 @@
 use anyhow::{Context, Result};
 use app_utils::{init_from_env, init_tracing, InitFromEnv};
-use gradescope_api::export_submissions::read_zip;
+use gradescope_api::export_submissions::{read_zip, SubmissionPdfReader};
 use lib203::homework::{find_homeworks, HwNumber};
-use tokio::fs::File;
+use tokio::fs::{self, File};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
 
-    full_path().await
+    // full_path().await
     // load_zip().await
+    load_pdf().await
 }
 
 async fn full_path() -> Result<()> {
@@ -43,6 +44,19 @@ async fn full_path() -> Result<()> {
 async fn load_zip() -> Result<()> {
     let zip_data = File::open("out/submissions.zip").await?;
     read_zip(zip_data.compat()).await?;
+
+    Ok(())
+}
+
+async fn load_pdf() -> Result<()> {
+    let matched_data = fs::read("out/example_matched.pdf").await?;
+    let unmatched_data = fs::read("out/example_unmatched.pdf").await?;
+
+    println!("matched:");
+    SubmissionPdfReader::new(matched_data)?.unmatched_pages()?;
+
+    println!("unmatched:");
+    SubmissionPdfReader::new(unmatched_data)?.unmatched_pages()?;
 
     Ok(())
 }
