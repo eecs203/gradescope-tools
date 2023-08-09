@@ -1,46 +1,86 @@
-use std::collections::HashMap;
+use std::io;
+use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Context as AnyhowContext, Result};
+use async_stream::try_stream;
 use async_zip::base::read::stream::ZipFileReader;
-use futures::AsyncRead;
+use futures::{AsyncBufRead, AsyncRead, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use pdf::content::{Op, TextDrawAdjusted};
 use pdf::file::{File, FileOptions, NoCache};
 use pdf::object::{Page, PageRc};
 use pdf::PdfError;
-use tracing::info;
+use reqwest::RequestBuilder;
+use tracing::{info, trace};
 
 use crate::types::QuestionNumber;
 
-pub async fn read_zip(zip_data: impl AsyncRead + Unpin) -> Result<()> {
-    let mut zip = ZipFileReader::new(zip_data);
-    while let Some(zip_reading) = zip
-        .next_with_entry()
+pub async fn download_submission_export(
+    request: RequestBuilder,
+) -> Result<impl AsyncBufRead + Unpin> {
+    Ok(request
+        .timeout(Duration::from_secs(30 * 60))
+        .send()
         .await
-        .context("could not read next zip entry")?
-    {
-        let entry = zip_reading.reader().entry();
-        let filename = entry.filename().as_str()?;
-        info!(filename, "read file entry from zip");
-
-        zip = zip_reading.skip().await?;
-    }
-
-    Ok(())
+        .context("export download failed")?
+        .bytes_stream()
+        .inspect_ok(|bytes| trace!(num_bytes = bytes.len(), "got byte chunk"))
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+        .into_async_read())
 }
 
-pub struct SubmissionPdfReader {
+pub fn read_zip(zip_data: impl AsyncRead + Unpin) -> impl Stream<Item = Result<(String, Vec<u8>)>> {
+    try_stream! {
+        let mut zip = ZipFileReader::new(zip_data);
+        while let Some(mut zip_reading) = zip
+            .next_with_entry()
+            .await
+            .context("cannot read next zip entry")?
+        {
+            let reader = zip_reading.reader_mut();
+            let entry = reader.entry();
+            let filename = entry.filename().as_str().context("cannot decode zip entry filename")?;
+
+            if filename.ends_with(".yml") {
+                info!(filename, "skipping metadata file");
+            } else if !filename.ends_with(".pdf") {
+                info!(filename, "skipping non-PDF zip entry");
+            } else {
+                let filename = filename.to_owned();
+                let mut buf = Vec::new();
+                reader.read_to_end_checked(&mut buf).await.context("cannot read zip entry file data")?;
+                yield (filename, buf);
+            }
+
+            zip = zip_reading.skip().await.context("cannot skip to next zip entry")?;
+        }
+    }
+}
+
+pub fn files_as_submissions(
+    files: impl Stream<Item = Result<(String, Vec<u8>)>>,
+) -> impl Stream<Item = Result<(String, SubmissionPdf)>> {
+    files.map(|result| {
+        let (filename, data) = result?;
+        let submission = SubmissionPdf::new(data).context("cannot read file as PDF")?;
+        anyhow::Ok((filename, submission))
+    })
+}
+
+pub struct SubmissionPdf {
     file: File<Vec<u8>, NoCache, NoCache>,
 }
 
-impl SubmissionPdfReader {
+impl SubmissionPdf {
     pub fn new(pdf_data: Vec<u8>) -> Result<Self> {
         let file = FileOptions::uncached().load(pdf_data)?;
 
         Ok(Self { file })
     }
 
-    pub fn question_matching(&self) -> Result<HashMap<MatchingState, Vec<QuestionNumber>>> {
+    pub fn question_matching(
+        &self,
+    ) -> Result<impl Iterator<Item = (MatchingState, QuestionNumber)>> {
         let page_kinds = self.page_kinds()?;
 
         let questions_by_matching = page_kinds
@@ -62,8 +102,7 @@ impl SubmissionPdfReader {
                     Some((MatchingState::Unmatched, number))
                 }
                 None => None,
-            })
-            .into_group_map();
+            });
 
         Ok(questions_by_matching)
     }
