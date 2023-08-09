@@ -1,22 +1,23 @@
 use std::collections::HashMap;
-use std::io;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::TryStreamExt;
+use futures::Stream;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
 use reqwest::{Client as HttpClient, RequestBuilder, Response};
 use scraper::{ElementRef, Html};
 use tokio::time::sleep;
-use tracing::{info, trace};
+use tracing::info;
 use url::Url;
 
 use crate::assignment::{Assignment, AssignmentName};
 use crate::course::{Course, Role};
 use crate::creds::Creds;
-use crate::export_submissions::read_zip;
+use crate::export_submissions::{
+    download_submission_export, files_as_submissions, read_zip, SubmissionPdf,
+};
 use crate::regrade::Regrade;
 use crate::types::{GraderName, Points, QuestionNumber, QuestionTitle, StudentName};
 use crate::util::*;
@@ -282,7 +283,11 @@ impl Client<Auth> {
         ))
     }
 
-    pub async fn export_submissions(&self, course: &Course, assignment: &Assignment) -> Result<()> {
+    pub async fn export_submissions(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<impl Stream<Item = Result<(String, SubmissionPdf)>>> {
         let review_grades_page = self
             .get_gs_html(&gs_review_grades_path(course, assignment))
             .await
@@ -298,21 +303,12 @@ impl Client<Auth> {
             .attr("href")
             .context("missing href attribute")?;
 
-        let response = self
-            .get_gs_request(export_download_path)
-            .await
-            .timeout(Duration::from_secs(30 * 60))
-            .send()
-            .await
-            .context("export download failed")?
-            .bytes_stream()
-            .inspect_ok(|bytes| trace!(num_bytes = bytes.len(), "got byte chunk"))
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-            .into_async_read();
+        let request = self.get_gs_request(export_download_path).await;
+        let zip = download_submission_export(request).await?;
+        let files = read_zip(zip);
+        let submissions = files_as_submissions(files);
 
-        read_zip(response).await?;
-
-        Ok(())
+        Ok(submissions)
     }
 }
 
