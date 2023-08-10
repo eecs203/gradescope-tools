@@ -27,7 +27,6 @@ async fn main() -> Result<()> {
         .try_filter(|(_, unmatched)| future::ready(*unmatched >= MIN_UNMATCHED_TO_NOTIFY))
         .inspect_ok(|(filename, num)| warn!(filename, num, "Unmatched!"))
         .filter_map(|result| async move { result.err() })
-        .take(100)
         .collect::<Vec<_>>()
         .await;
 
@@ -39,15 +38,20 @@ async fn main() -> Result<()> {
 fn count_unmatched(
     submissions: impl Stream<Item = Result<(String, SubmissionPdf)>>,
 ) -> impl Stream<Item = Result<(String, usize)>> {
-    submissions.and_then(|(filename, pdf)| async move {
-        let matching = pdf
-            .question_matching()
-            .context("cannot get question matching status")?;
-        let num_unmatched = matching
-            .filter(|(matching, _)| matches!(matching, MatchingState::Unmatched))
-            .count();
-        Ok((filename, num_unmatched))
-    })
+    submissions
+        .map(|result| {
+            tokio_rayon::spawn(move || {
+                let (filename, pdf) = result?;
+                let matching = pdf
+                    .question_matching()
+                    .context("cannot get question matching status")?;
+                let num_unmatched = matching
+                    .filter(|(matching, _)| matches!(matching, MatchingState::Unmatched))
+                    .count();
+                Ok((filename, num_unmatched))
+            })
+        })
+        .buffer_unordered(512)
 }
 
 async fn download_submissions() -> Result<impl Stream<Item = Result<(String, SubmissionPdf)>>> {
