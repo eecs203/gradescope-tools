@@ -1,16 +1,17 @@
-use std::io;
 use std::time::Duration;
+use std::{io, thread};
 
 use anyhow::{bail, Context as AnyhowContext, Result};
-use async_stream::try_stream;
 use async_zip::base::read::stream::ZipFileReader;
-use futures::{AsyncBufRead, AsyncRead, Stream, StreamExt, TryStreamExt};
+use futures::channel::mpsc;
+use futures::{AsyncBufRead, AsyncRead, SinkExt, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use pdf::content::{Op, TextDrawAdjusted};
 use pdf::file::{File, FileOptions, NoCache};
 use pdf::object::{Page, PageRc};
 use pdf::PdfError;
 use reqwest::RequestBuilder;
+use tokio::runtime::Handle;
 use tracing::{info, trace};
 
 use crate::types::QuestionNumber;
@@ -29,42 +30,83 @@ pub async fn download_submission_export(
         .into_async_read())
 }
 
-pub fn read_zip(zip_data: impl AsyncRead + Unpin) -> impl Stream<Item = Result<(String, Vec<u8>)>> {
-    try_stream! {
-        let mut zip = ZipFileReader::new(zip_data);
-        while let Some(mut zip_reading) = zip
-            .next_with_entry()
-            .await
-            .context("cannot read next zip entry")?
-        {
-            let reader = zip_reading.reader_mut();
-            let entry = reader.entry();
-            let filename = entry.filename().as_str().context("cannot decode zip entry filename")?;
+pub fn read_zip(
+    zip_data: impl AsyncRead + Unpin + Send + 'static,
+) -> impl Stream<Item = Result<(String, Vec<u8>)>> {
+    let (sender, receiver) = mpsc::unbounded();
+    let handle = Handle::current();
 
-            if filename.ends_with(".yml") {
-                info!(filename, "skipping metadata file");
-            } else if !filename.ends_with(".pdf") {
-                info!(filename, "skipping non-PDF zip entry");
-            } else {
-                let filename = filename.to_owned();
-                let mut buf = Vec::new();
-                reader.read_to_end_checked(&mut buf).await.context("cannot read zip entry file data")?;
-                yield (filename, buf);
+    thread::spawn(move || {
+        handle.block_on(async move {
+            let send = |result| async { sender.clone().feed(result).await.unwrap() };
+
+            let mut zip = ZipFileReader::new(zip_data);
+            loop {
+                match zip.next_with_entry().await {
+                    Ok(Some(mut zip_reading)) => {
+                        let reader = zip_reading.reader_mut();
+                        let entry = reader.entry();
+
+                        match entry.filename().as_str() {
+                            Err(err) => {
+                                send(Err(err).context("cannot decode zip entry filename")).await
+                            }
+                            Ok(filename) => {
+                                if filename.ends_with(".yml") {
+                                    info!(filename, "skipping metadata file");
+                                } else if !filename.ends_with(".pdf") {
+                                    info!(filename, "skipping non-PDF zip entry");
+                                } else {
+                                    let filename = filename.to_owned();
+                                    let mut buf = Vec::new();
+                                    let result = reader.read_to_end_checked(&mut buf).await;
+                                    match result {
+                                        Err(err) => {
+                                            send(
+                                                Err(err).context("cannot read zip entry file data"),
+                                            )
+                                            .await
+                                        }
+                                        Ok(_) => send(Ok((filename, buf))).await,
+                                    }
+                                }
+                            }
+                        };
+
+                        let result = zip_reading.skip().await;
+                        zip = match result {
+                            Ok(zip) => zip,
+                            Err(err) => {
+                                send(Err(err).context("cannot skip to next zip entry")).await;
+                                break;
+                            }
+                        };
+                    }
+                    Err(err) => {
+                        send(Err(err).context("cannot read next zip entry")).await;
+                        break;
+                    }
+                    Ok(None) => break,
+                }
             }
+        });
+    });
 
-            zip = zip_reading.skip().await.context("cannot skip to next zip entry")?;
-        }
-    }
+    receiver
 }
 
 pub fn files_as_submissions(
     files: impl Stream<Item = Result<(String, Vec<u8>)>>,
 ) -> impl Stream<Item = Result<(String, SubmissionPdf)>> {
-    files.map(|result| {
-        let (filename, data) = result?;
-        let submission = SubmissionPdf::new(data).context("cannot read file as PDF")?;
-        anyhow::Ok((filename, submission))
-    })
+    files
+        .map(|result| {
+            tokio_rayon::spawn(move || {
+                let (filename, data) = result?;
+                let submission = SubmissionPdf::new(data).context("cannot read file as PDF")?;
+                anyhow::Ok((filename, submission))
+            })
+        })
+        .buffer_unordered(512)
 }
 
 pub struct SubmissionPdf {
