@@ -9,6 +9,7 @@ pub struct Regrade {
     question_title: QuestionTitle,
     grader_name: GraderName,
     url: Url,
+    completed: bool,
 }
 
 impl Regrade {
@@ -18,6 +19,7 @@ impl Regrade {
         question_title: QuestionTitle,
         grader_name: GraderName,
         url: Url,
+        completed: bool,
     ) -> Self {
         Self {
             student_name,
@@ -25,6 +27,7 @@ impl Regrade {
             question_title,
             grader_name,
             url,
+            completed,
         }
     }
 
@@ -46,5 +49,9 @@ impl Regrade {
 
     pub fn url(&self) -> &Url {
         &self.url
+    }
+
+    pub fn completed(&self) -> bool {
+        self.completed
     }
 }

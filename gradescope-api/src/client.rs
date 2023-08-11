@@ -242,7 +242,8 @@ impl Client<Auth> {
         let grader_entry = entries.next().context("missing grader entry")?;
         let grader_name = GraderName::new(text(grader_entry));
 
-        let _completed_entry = entries.next().context("missing completed entry")?;
+        let completed_entry = entries.next().context("missing completed entry")?;
+        let completed = completed_entry.has_children();
 
         let link_entry = entries.next().context("missing link entry")?;
         let url_text = link_entry
@@ -260,6 +261,7 @@ impl Client<Auth> {
             question_title,
             grader_name,
             url,
+            completed,
         ))
     }
 }

@@ -107,20 +107,21 @@ async fn insert_regrade(
     regrade: &Regrade,
 ) -> Result<()> {
     let mut db = db_pool.acquire().await?;
-    let (assignment_id, student_name, question_number, question_title, grader_name) = (
+    let (assignment_id, student_name, question_number, question_title, grader_name, completed) = (
         assignment.id(),
         regrade.student_name().as_str(),
         regrade.question_number().as_str(),
         regrade.question_title().as_str(),
         regrade.grader_name().as_str(),
+        i8::from(regrade.completed()),
     );
 
     sqlx::query!(
         "
-        INSERT OR IGNORE INTO regrade (assignment_id, student_name, question_number, question_title, grader_name)
-        VALUES (?, ?, ?, ?, ?);
+        INSERT OR IGNORE INTO regrade (assignment_id, student_name, question_number, question_title, grader_name, completed)
+        VALUES (?, ?, ?, ?, ?, ?);
         ",
-        assignment_id, student_name, question_number, question_title, grader_name
+        assignment_id, student_name, question_number, question_title, grader_name, completed
     ).execute(&mut *db).await?;
 
     Ok(())

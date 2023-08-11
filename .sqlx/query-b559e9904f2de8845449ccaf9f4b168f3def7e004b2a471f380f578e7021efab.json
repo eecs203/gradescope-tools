@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        INSERT OR IGNORE INTO regrade (assignment_id, student_name, question_number, question_title, grader_name, completed)\n        VALUES (?, ?, ?, ?, ?, ?);\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "b559e9904f2de8845449ccaf9f4b168f3def7e004b2a471f380f578e7021efab"
+}
