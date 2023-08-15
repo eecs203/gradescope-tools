@@ -1,0 +1,24 @@
+name: Checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --no-fail-fast
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -Dwarnings
+      
+      - name: Formatting
+        run: cargo fmt --all --check
