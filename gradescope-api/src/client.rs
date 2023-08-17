@@ -19,7 +19,7 @@ use crate::export_submissions::{
     download_submission_export, files_as_submissions, read_zip, SubmissionPdf,
 };
 use crate::regrade::Regrade;
-use crate::submission::SubmissionsManagerProps;
+use crate::submission::{SubmissionId, SubmissionsManagerProps};
 use crate::types::{GraderName, Points, QuestionNumber, QuestionTitle, StudentName};
 use crate::util::*;
 
@@ -328,7 +328,7 @@ impl Client<Auth> {
         &self,
         course: &Course,
         assignment: &Assignment,
-    ) -> Result<impl Stream<Item = Result<(String, SubmissionPdf)>>> {
+    ) -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>> {
         let review_grades_page = self
             .get_gs_html(&gs_review_grades_path(course, assignment))
             .await
