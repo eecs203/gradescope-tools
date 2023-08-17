@@ -1,3 +1,4 @@
+use core::fmt;
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
@@ -13,6 +14,18 @@ use crate::types::{StudentId, StudentIdAsInt, StudentName};
 #[serde(transparent)]
 pub struct SubmissionId {
     id: String,
+}
+
+impl SubmissionId {
+    pub fn new(id: String) -> Self {
+        Self { id }
+    }
+}
+
+impl fmt::Display for SubmissionId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.id.fmt(f)
+    }
 }
 
 serde_conv!(

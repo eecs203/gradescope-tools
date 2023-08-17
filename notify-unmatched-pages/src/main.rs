@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
 use app_utils::{init_from_env, init_tracing, InitFromEnv};
-use futures::{future, Stream, StreamExt, TryStreamExt};
+use futures::{future, stream, Stream, StreamExt, TryStream, TryStreamExt};
 use gradescope_api::export_submissions::{
     files_as_submissions, read_zip, MatchingState, SubmissionPdf,
 };
-use gradescope_api::submission::SubmissionsManagerProps;
+use gradescope_api::submission::{StudentSubmitter, SubmissionId, SubmissionsManagerProps};
 use lib203::homework::{find_homeworks, HwNumber};
 use tokio::fs::{self, File};
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use tracing::{info, trace, warn};
+use tracing::{error, info, trace, warn};
 
 const MIN_UNMATCHED_TO_NOTIFY: usize = 5;
 
@@ -16,38 +16,50 @@ const MIN_UNMATCHED_TO_NOTIFY: usize = 5;
 async fn main() -> Result<()> {
     init_tracing();
 
-    // let props_json = fs::read_to_string("out/submissions_manager_props.json")
-    //     .await
-    //     .unwrap();
-    // let props: SubmissionsManagerProps = serde_json::from_str(&props_json).unwrap();
+    let metadata = load_submission_metadata().await?;
+    // let metadata = download_submission_metadata().await?;
 
-    // println!("{props:?}");
+    let submission_to_students = metadata.submission_to_student_map()?;
 
-    download_submission_metadata().await?;
+    let submissions = load_zip().await?;
+    // let submissions = download_submissions().await?;
 
-    // let submissions = load_zip().await?;
-    // // let submissions = download_submissions().await?;
+    let num_unmatched = count_unmatched(submissions);
 
-    // let num_unmatched = count_unmatched(submissions);
+    let unmatched_submissions = num_unmatched
+        .inspect_ok(|(id, num)| trace!(%id, num, "counted unmatched for submission"))
+        .try_filter(|(_, num)| future::ready(*num >= 1))
+        .inspect_ok(|(id, num)| info!(%id, num, "found not totally matched submission"))
+        .try_filter(|(_, num)| future::ready(*num >= MIN_UNMATCHED_TO_NOTIFY))
+        .inspect_ok(|(id, num)| warn!(%id, num, "Unmatched submission!"));
 
-    // let errors = num_unmatched
-    //     .inspect_ok(|(filename, num)| trace!(filename, num, "counted unmatched for submission"))
-    //     .try_filter(|(_, unmatched)| future::ready(*unmatched >= 1))
-    //     .inspect_ok(|(filename, num)| info!(filename, num, "found not totally matched submission"))
-    //     .try_filter(|(_, unmatched)| future::ready(*unmatched >= MIN_UNMATCHED_TO_NOTIFY))
-    //     .inspect_ok(|(filename, num)| warn!(filename, num, "Unmatched!"))
-    //     .filter_map(|result| async move { result.err() })
-    //     .collect::<Vec<_>>()
-    //     .await;
+    let unmatched_students = unmatched_submissions
+        .map_ok(|(id, num)| {
+            let students = submission_to_students.get(&id).with_context(|| {
+                format!(
+                    "could not find students for submission {id}, with {num} mismatched problems"
+                )
+            })?;
 
-    // println!("{errors:?}");
+            Ok((id, students, num))
+        })
+        .and_then(future::ready);
+
+    let errors = unmatched_students
+        .inspect_ok(|(id, students, num)| info!(%id, ?students, num, "report unmatched pages"))
+        .inspect_err(|err| error!(%err, "error somewhere"))
+        .filter_map(|result| async move { result.err() })
+        .collect::<Vec<_>>()
+        .await;
+
+    println!("{errors:?}");
 
     Ok(())
 }
 
 fn count_unmatched(
-    submissions: impl Stream<Item = Result<(String, SubmissionPdf)>>,
-) -> impl Stream<Item = Result<(String, usize)>> {
+    submissions: impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>,
+) -> impl Stream<Item = Result<(SubmissionId, usize)>> {
     submissions
         .map(|result| {
             tokio_rayon::spawn(move || {
@@ -64,7 +76,7 @@ fn count_unmatched(
         .buffer_unordered(512)
 }
 
-async fn download_submission_metadata() -> Result<()> {
+async fn download_submission_metadata() -> Result<SubmissionsManagerProps> {
     let InitFromEnv {
         course,
         gradescope,
@@ -83,19 +95,22 @@ async fn download_submission_metadata() -> Result<()> {
         .individual()
         .context("could not find Individual HW 1")?;
 
-    let submissions = gradescope
+    let metadata = gradescope
         .get_submissions_metadata(&course, hw_1)
         .await
         .context("could not get submissions")?;
 
-    let submissions_to_students = submissions.submission_to_student_map()?;
-
-    println!("mapping: {submissions_to_students:#?}");
-
-    Ok(())
+    Ok(metadata)
 }
 
-async fn download_submissions() -> Result<impl Stream<Item = Result<(String, SubmissionPdf)>>> {
+async fn load_submission_metadata() -> Result<SubmissionsManagerProps> {
+    let props_json = fs::read_to_string("out/submissions_manager_props.json").await?;
+    let metadata = serde_json::from_str(&props_json)?;
+    Ok(metadata)
+}
+
+async fn download_submissions() -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>>
+{
     let InitFromEnv {
         course,
         gradescope,
@@ -122,7 +137,7 @@ async fn download_submissions() -> Result<impl Stream<Item = Result<(String, Sub
     Ok(submissions)
 }
 
-async fn load_zip() -> Result<impl Stream<Item = Result<(String, SubmissionPdf)>>> {
+async fn load_zip() -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>> {
     let zip = File::open("out/submissions.zip").await?.compat();
     let files = read_zip(zip);
     let submissions = files_as_submissions(files);

@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 use std::{io, thread};
 
@@ -14,6 +15,7 @@ use reqwest::RequestBuilder;
 use tokio::runtime::Handle;
 use tracing::{info, trace};
 
+use crate::submission::SubmissionId;
 use crate::types::QuestionNumber;
 
 pub async fn download_submission_export(
@@ -97,13 +99,22 @@ pub fn read_zip(
 
 pub fn files_as_submissions(
     files: impl Stream<Item = Result<(String, Vec<u8>)>>,
-) -> impl Stream<Item = Result<(String, SubmissionPdf)>> {
+) -> impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>> {
     files
         .map(|result| {
             tokio_rayon::spawn(move || {
                 let (filename, data) = result?;
+
+                let filename_stem = Path::new(&filename)
+                    .file_stem()
+                    .context("cannot get PDF filename stem")?
+                    .to_str()
+                    .expect("the stem should be UTF-8 since all of `filename` is");
+                let id = SubmissionId::new(filename_stem.to_owned());
+
                 let submission = SubmissionPdf::new(data).context("cannot read file as PDF")?;
-                anyhow::Ok((filename, submission))
+
+                anyhow::Ok((id, submission))
             })
         })
         .buffer_unordered(512)
