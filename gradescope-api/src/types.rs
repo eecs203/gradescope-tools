@@ -125,6 +125,12 @@ pub struct Email {
     email: String,
 }
 
+impl fmt::Display for Email {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.email.fmt(f)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Points {
     points: f32,
