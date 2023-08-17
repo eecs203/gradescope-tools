@@ -8,7 +8,7 @@ use serde_with::{serde_as, serde_conv};
 use tracing::warn;
 
 use crate::assignment::{AssignmentId, AssignmentIdAsInt};
-use crate::types::{StudentId, StudentIdAsInt, StudentName};
+use crate::types::{Email, StudentId, StudentIdAsInt, StudentName};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Deserialize)]
 #[serde(transparent)]
@@ -106,7 +106,17 @@ pub struct StudentSubmitter {
     #[serde_as(as = "StudentIdAsInt")]
     id: StudentId,
     name: StudentName,
-    email: String,
+    email: Email,
+}
+
+impl StudentSubmitter {
+    pub fn name(&self) -> &StudentName {
+        &self.name
+    }
+
+    pub fn email(&self) -> &Email {
+        &self.email
+    }
 }
 
 #[serde_as]

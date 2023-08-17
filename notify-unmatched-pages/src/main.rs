@@ -10,6 +10,10 @@ use tokio::fs::{self, File};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{error, info, trace, warn};
 
+use crate::report::UnmatchedReport;
+
+pub mod report;
+
 const MIN_UNMATCHED_TO_NOTIFY: usize = 5;
 
 #[tokio::main]
@@ -45,14 +49,25 @@ async fn main() -> Result<()> {
         })
         .and_then(future::ready);
 
-    let errors = unmatched_students
-        .inspect_ok(|(id, students, num)| info!(%id, ?students, num, "report unmatched pages"))
+    let results = unmatched_students
+        .map_ok(UnmatchedReport::new)
         .inspect_err(|err| error!(%err, "error somewhere"))
-        .filter_map(|result| async move { result.err() })
         .collect::<Vec<_>>()
         .await;
 
-    println!("{errors:?}");
+    println!("Reports:");
+    for report in results.iter().flatten() {
+        println!("{report}");
+        println!("\n----------\n");
+    }
+    println!();
+
+    println!("Errors:");
+    for result in results.iter() {
+        if let Err(err) = result {
+            println!("{err}");
+        }
+    }
 
     Ok(())
 }
