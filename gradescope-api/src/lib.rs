@@ -4,6 +4,7 @@ pub mod course;
 pub mod creds;
 pub mod export_submissions;
 pub mod regrade;
+pub mod submission;
 pub mod types;
 
 mod util;

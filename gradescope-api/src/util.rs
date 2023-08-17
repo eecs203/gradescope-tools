@@ -21,6 +21,10 @@ pub fn gs_assignment_path(course: &Course, assignment: &Assignment, path: &str) 
     gs_course_path(course, &format!("/assignments/{}{path}", assignment.id()))
 }
 
+pub fn gs_manage_submissions_path(course: &Course, assignment: &Assignment) -> String {
+    gs_assignment_path(course, assignment, "/submissions")
+}
+
 pub fn gs_review_grades_path(course: &Course, assignment: &Assignment) -> String {
     gs_assignment_path(course, assignment, "/review_grades")
 }
