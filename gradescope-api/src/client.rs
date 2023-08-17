@@ -12,13 +12,14 @@ use tokio::time::sleep;
 use tracing::info;
 use url::Url;
 
-use crate::assignment::{Assignment, AssignmentName};
+use crate::assignment::{Assignment, AssignmentId, AssignmentName};
 use crate::course::{Course, Role};
 use crate::creds::Creds;
 use crate::export_submissions::{
     download_submission_export, files_as_submissions, read_zip, SubmissionPdf,
 };
 use crate::regrade::Regrade;
+use crate::submission::SubmissionsManagerProps;
 use crate::types::{GraderName, Points, QuestionNumber, QuestionTitle, StudentName};
 use crate::util::*;
 
@@ -46,6 +47,7 @@ selectors! {
     A = "a",
     REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr",
     BULK_EXPORT_A = ".js-bulkExportModalDownload",
+    SUBMISSIONS_MANAGER = "#main-content > [data-react-class=SubmissionsManager]",
 }
 
 pub struct Client<State: ClientState> {
@@ -66,7 +68,7 @@ impl<State: ClientState> Client<State> {
         let url = gs_url(path);
         info!(%url, "sending GS request");
 
-        self.client.get(url)
+        self.client.get(url).header("Accept", "text/html")
     }
 
     async fn get_gs_response(&self, path: &str) -> Result<Response> {
@@ -210,7 +212,7 @@ impl Client<Auth> {
         let mut entries = row.select(&TD);
 
         let name_entry = entries.next()?;
-        let id = id_from_link(name_entry.select(&A).next()?)?;
+        let id = AssignmentId::new(id_from_link(name_entry.select(&A).next()?)?);
         let name = AssignmentName::new(text(name_entry));
 
         let points_entry = entries.next()?;
@@ -281,6 +283,45 @@ impl Client<Auth> {
             url,
             completed,
         ))
+    }
+
+    pub async fn get_submissions_metadata(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<SubmissionsManagerProps> {
+        let manage_submissions_page = self
+            .get_gs_html(&gs_manage_submissions_path(course, assignment))
+            .await
+            .context("cannot get \"manage submissions\" page")?;
+
+        let submissions_manager = manage_submissions_page
+            .select(&SUBMISSIONS_MANAGER)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!(
+                    "not exactly one submissions manager: found {}",
+                    err_it.count()
+                )
+            })?;
+        let submissions_manager_data = submissions_manager
+            .value()
+            .attr("data-react-props")
+            .context("missing submission manager data")?;
+
+        let submissions_manager_props: SubmissionsManagerProps =
+            serde_json::from_str(submissions_manager_data)
+                .context("could not parse submissions manager data")?;
+
+        if assignment.id() != submissions_manager_props.assignment_id() {
+            bail!(
+                "assignment id is `{}`, but the submissions manager is for assignment id `{}`",
+                assignment.id(),
+                submissions_manager_props.assignment_id()
+            );
+        }
+
+        Ok(submissions_manager_props)
     }
 
     pub async fn export_submissions(

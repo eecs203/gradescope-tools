@@ -77,7 +77,7 @@ async fn insert_assignment(
 ) -> Result<()> {
     let mut db = db_pool.acquire().await?;
     let (id, course_id, name, points) = (
-        assignment.id(),
+        assignment.id().as_str(),
         course.id(),
         assignment.name().as_str(),
         assignment.points().as_f32(),
@@ -106,7 +106,7 @@ async fn insert_regrade(
 ) -> Result<()> {
     let mut db = db_pool.acquire().await?;
     let (assignment_id, student_name, question_number, question_title, grader_name, completed) = (
-        assignment.id(),
+        assignment.id().as_str(),
         regrade.student_name().as_str(),
         regrade.question_number().as_str(),
         regrade.question_title().as_str(),

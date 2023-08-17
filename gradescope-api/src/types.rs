@@ -5,7 +5,8 @@ use std::fmt;
 use std::num::FpCategory;
 
 use anyhow::{bail, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_with::serde_conv;
 
 // Not just an integer because of question parts. For example, part 2 of question 3 is "3.2".
 // TODO: parse as a sequence of integers
@@ -73,7 +74,7 @@ impl fmt::Display for GraderName {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StudentName {
     name: String,
@@ -93,6 +94,35 @@ impl fmt::Display for StudentName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.name.fmt(f)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(transparent)]
+pub struct StudentId {
+    id: String,
+}
+
+impl fmt::Display for StudentId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.id.fmt(f)
+    }
+}
+
+serde_conv!(
+    pub(crate) StudentIdAsInt,
+    StudentId,
+    |student_id: &StudentId| student_id.id.parse::<u64>().unwrap(),
+    |value: u64| -> Result<_, std::convert::Infallible> {
+        Ok(StudentId {
+            id: value.to_string(),
+        })
+    }
+);
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(transparent)]
+pub struct Email {
+    email: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
