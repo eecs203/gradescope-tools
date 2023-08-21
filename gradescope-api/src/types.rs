@@ -10,7 +10,7 @@ use serde_with::serde_conv;
 
 // Not just an integer because of question parts. For example, part 2 of question 3 is "3.2".
 // TODO: parse as a sequence of integers
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct QuestionNumber {
     number: String,
 }
@@ -22,6 +22,14 @@ impl QuestionNumber {
 
     pub fn as_str(&self) -> &str {
         &self.number
+    }
+}
+
+impl fmt::Debug for QuestionNumber {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("QuestionNumber")
+            .field(&format_args!("{}", self.number))
+            .finish()
     }
 }
 
