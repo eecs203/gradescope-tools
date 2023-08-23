@@ -13,7 +13,7 @@ use itertools::Itertools;
 use lib203::homework::{find_homeworks, HwNumber};
 use tokio::fs::{self, File};
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::report::UnmatchedReport;
 
@@ -30,26 +30,30 @@ async fn main() -> Result<()> {
         gradescope,
         course_name: _,
     } = init_from_env().await?;
+    debug!("initialized");
 
     let assignments = gradescope
         .get_assignments(&course)
         .await
         .context("could not get assignments")?;
+    trace!(?assignments, "got assignments");
     let homeworks = find_homeworks(&assignments);
+    trace!(?homeworks, "got homeworks");
 
-    let hw_1 = homeworks
-        .get(&HwNumber::new("1"))
-        .context("could not find HW 1")?
-        .individual()
-        .context("could not find Individual HW 1")?;
+    let gw_2 = homeworks
+        .get(&HwNumber::new("2"))
+        .context("could not find HW 2")?
+        .groupwork()
+        .context("could not find Groupwork HW 2")?;
+    debug!(?gw_2, "got target assignment");
 
     // let metadata = load_submission_metadata().await?;
-    let metadata = download_submission_metadata(&course, hw_1, &gradescope).await?;
+    let metadata = download_submission_metadata(&course, gw_2, &gradescope).await?;
 
     let submission_to_students = metadata.submission_to_student_map()?;
 
     // let submissions = load_zip().await?;
-    let submissions = download_submissions(&course, hw_1, &gradescope).await?;
+    let submissions = download_submissions(&course, gw_2, &gradescope).await?;
 
     let num_unmatched = unmatched_questions(submissions);
 
