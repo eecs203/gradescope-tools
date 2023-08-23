@@ -21,7 +21,7 @@ use crate::export_submissions::{
 };
 use crate::regrade::Regrade;
 use crate::submission::{SubmissionId, SubmissionsManagerProps};
-use crate::types::{GraderName, Points, QuestionNumber, QuestionTitle, StudentName};
+use crate::types::{GraderName, Points, QuestionTitle, StudentName};
 use crate::util::*;
 
 macro_rules! selectors {
@@ -117,7 +117,7 @@ impl Client<Init> {
         let client = HttpClient::builder()
             .cookie_store(true)
             .redirect(redirect_policy)
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
             .build()?;
 
         // init cookies
@@ -274,7 +274,9 @@ impl Client<Auth> {
         let (question_number_text, question_title_text) = question_entry_text
             .split_once(':')
             .with_context(|| format!("couldn't split question entry \"{question_entry_text}\""))?;
-        let question_number = QuestionNumber::new(question_number_text.to_owned());
+        let question_number = question_number_text
+            .parse()
+            .context("could not parse question number")?;
         let question_title = QuestionTitle::new(question_title_text.to_owned());
 
         let grader_entry = entries.next().context("missing grader entry")?;
@@ -426,7 +428,7 @@ impl Client<Auth> {
             .await
     }
 
-    #[tracing::instrument(skip(self), err, ret)]
+    #[tracing::instrument(skip(self, csrf_token), err, ret)]
     async fn await_export_completion(
         &self,
         course: &Course,
@@ -456,7 +458,6 @@ impl Client<Auth> {
                 status = status.status(),
                 "still waiting on export..."
             );
-            debug!(?status, "complete export status");
         }
     }
 }

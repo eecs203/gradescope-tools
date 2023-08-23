@@ -248,13 +248,6 @@ impl SubmissionPdf {
 
     #[tracing::instrument(level = "debug", skip(self), fields(num_pages = self.pages.len()), err, ret)]
     fn count_assignment_summary_pages(&self) -> Result<usize> {
-        let first_page = self.pages.first().context("PDF has no pages")?;
-        let first_question_number = self
-            .get_first_question_number_from_first_page(first_page)
-            .context("cannot get first question number")?;
-
-        debug!(%first_question_number);
-
         let mut pages = self
             .pages
             .iter()
@@ -273,7 +266,7 @@ impl SubmissionPdf {
         let just_after = pages.next().ok_or_else(|| {
             anyhow!("no pages after the {num_assignment_summary_pages} assignment summary pages")
         })?;
-        if !self.is_just_after_assignment_summary_pages(just_after, &first_question_number)? {
+        if !self.is_just_after_assignment_summary_pages(just_after)? {
             bail!("found unexpected page just after the {num_assignment_summary_pages} assignment summary pages");
         }
 
@@ -292,11 +285,7 @@ impl SubmissionPdf {
     /// Determines if the given page is likely just after the assignment summary pages. In
     /// particular, if the page does immediately follow the last assignment summary page, returns
     /// true, and if not, is likely, but not guaranteed, to return false.
-    fn is_just_after_assignment_summary_pages(
-        &self,
-        page: &Page,
-        first_question: &QuestionNumber,
-    ) -> Result<bool> {
+    fn is_just_after_assignment_summary_pages(&self, page: &Page) -> Result<bool> {
         // The first page after the assignment summary is either a page of student submission (if
         // they matched pages to the first question) or the question summary for the first question
         // (if they did not).
@@ -305,8 +294,7 @@ impl SubmissionPdf {
         // it immediately follows an assignment summary page, so we return true, since given only
         // that information, it may.
 
-        Ok(self.is_first_question_summary_page(page, first_question)?
-            || self.is_student_submission_page(page)?)
+        Ok(self.is_first_question_summary_page(page) || self.is_student_submission_page(page)?)
     }
 
     /// For pages after the assignment summary, determine their kind
@@ -352,13 +340,19 @@ impl SubmissionPdf {
 
     /// Is this a question summary page for the first question, i.e. the first question summary page
     /// to appear in the PDF?
-    fn is_first_question_summary_page(
-        &self,
-        page: &Page,
-        first_question: &QuestionNumber,
-    ) -> Result<bool> {
-        let Some(first_text) = self.page_ops_text(page)?.next() else { return Ok(false) };
-        Ok(first_text.trim() == first_question.as_str())
+    #[tracing::instrument(level = "trace", skip(self, page), ret)]
+    fn is_first_question_summary_page(&self, page: &Page) -> bool {
+        self.get_number_of_question_summary(page)
+            .map(|question_number| {
+                trace!(%question_number);
+                question_number
+            })
+            .map_err(|err| {
+                trace!(question_number_err = %err);
+                err
+            })
+            .as_ref()
+            .map_or(false, QuestionNumber::is_first)
     }
 
     /// Given that the page is a question summary page, get the question number of the question
@@ -367,19 +361,12 @@ impl SubmissionPdf {
         let Some(first_text) = self.page_ops_text(page)?.next() else {
             bail!("No text on question summary page")
         };
-        let question_number_text = first_text.trim().to_owned();
-        Ok(QuestionNumber::new(question_number_text))
-    }
-
-    /// Gets the number for the first question (or its first part) given the first page of the PDF
-    fn get_first_question_number_from_first_page(&self, page: &Page) -> Result<QuestionNumber> {
-        self.page_ops_text(page)?
-            .skip_while(|text| text != "TOTAL POINTS")
-            .skip_while(|text| text != "QUESTION 1")
-            .nth(3) // after QUESTION 1, question name, number of points
-            .context("could not find first question number")
-            .map(|num| num.trim().to_owned())
-            .map(QuestionNumber::new)
+        let question_number = first_text
+            .trim()
+            .to_owned()
+            .parse()
+            .context("could not parse question number")?;
+        Ok(question_number)
     }
 
     fn page_ops_text(&self, page: &Page) -> Result<impl Iterator<Item = String>, PdfError> {

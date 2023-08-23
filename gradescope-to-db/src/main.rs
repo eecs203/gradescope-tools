@@ -108,7 +108,7 @@ async fn insert_regrade(
     let (assignment_id, student_name, question_number, question_title, grader_name, completed) = (
         assignment.id().as_str(),
         regrade.student_name().as_str(),
-        regrade.question_number().as_str(),
+        regrade.question_number().to_string(),
         regrade.question_title().as_str(),
         regrade.grader_name().as_str(),
         i8::from(regrade.completed()),

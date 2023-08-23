@@ -40,20 +40,20 @@ async fn main() -> Result<()> {
     let homeworks = find_homeworks(&assignments);
     trace!(?homeworks, "got homeworks");
 
-    let gw_2 = homeworks
-        .get(&HwNumber::new("2"))
-        .context("could not find HW 2")?
-        .groupwork()
-        .context("could not find Groupwork HW 2")?;
-    debug!(?gw_2, "got target assignment");
+    let id_3 = homeworks
+        .get(&HwNumber::new("3"))
+        .context("could not find HW 3")?
+        .individual()
+        .context("could not find Individual HW 3")?;
+    debug!(?id_3, "got target assignment");
 
     // let metadata = load_submission_metadata().await?;
-    let metadata = download_submission_metadata(&course, gw_2, &gradescope).await?;
+    let metadata = download_submission_metadata(&course, id_3, &gradescope).await?;
 
     let submission_to_students = metadata.submission_to_student_map()?;
 
     // let submissions = load_zip().await?;
-    let submissions = download_submissions(&course, gw_2, &gradescope).await?;
+    let submissions = download_submissions(&course, id_3, &gradescope).await?;
 
     let num_unmatched = unmatched_questions(submissions);
 
