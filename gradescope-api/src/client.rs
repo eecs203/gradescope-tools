@@ -8,8 +8,9 @@ use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
 use reqwest::{Client as HttpClient, RequestBuilder, Response};
 use scraper::{ElementRef, Html};
+use serde::Deserialize;
 use tokio::time::sleep;
-use tracing::info;
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::assignment::{Assignment, AssignmentId, AssignmentName};
@@ -48,6 +49,7 @@ selectors! {
     REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr",
     BULK_EXPORT_A = ".js-bulkExportModalDownload",
     SUBMISSIONS_MANAGER = "#main-content > [data-react-class=SubmissionsManager]",
+    CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
 pub struct Client<State: ClientState> {
@@ -80,6 +82,21 @@ impl<State: ClientState> Client<State> {
             .error_for_status()
             .context("Gradescope responded with an error")
     }
+
+    async fn post_gs_request(&self, path: &str) -> RequestBuilder {
+        sleep(Duration::from_millis(1000)).await;
+
+        let url = gs_url(path);
+        info!(%url, "sending GS POST request");
+
+        self.client.post(url)
+    }
+
+    fn ajax(&self, request: RequestBuilder, csrf_token: &str) -> RequestBuilder {
+        request
+            .header("X-Requested-With", "XMLHttpRequest")
+            .header("X-CSRF-Token", csrf_token)
+    }
 }
 
 impl Client<Init> {
@@ -100,6 +117,7 @@ impl Client<Init> {
         let client = HttpClient::builder()
             .cookie_store(true)
             .redirect(redirect_policy)
+            .timeout(Duration::from_secs(10))
             .build()?;
 
         // init cookies
@@ -329,27 +347,117 @@ impl Client<Auth> {
         course: &Course,
         assignment: &Assignment,
     ) -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>> {
-        let review_grades_page = self
-            .get_gs_html(&gs_review_grades_path(course, assignment))
-            .await
-            .context("getting review grades")?;
+        let export_download_path = self.exported_submissions_path(course, assignment).await?;
 
-        // TODO: before asking GS for an export, this link won't exist; ask for export in that case
-        let export_download_a = review_grades_page
-            .select(&BULK_EXPORT_A)
-            .exactly_one()
-            .map_err(|err_it| anyhow!("not exactly one export link: found {}", err_it.count()))?;
-        let export_download_path = export_download_a
-            .value()
-            .attr("href")
-            .context("missing href attribute")?;
-
-        let request = self.get_gs_request(export_download_path).await;
+        let request = self.get_gs_request(&export_download_path).await;
         let zip = download_submission_export(request).await?;
         let files = read_zip(zip);
         let submissions = files_as_submissions(files);
 
         Ok(submissions)
+    }
+
+    /// Get the path to the exported submissions, possibly requesting that Gradescope perform the
+    /// export if it has not yet done so. This can take substantial time (i.e. easily >10 minutes).
+    async fn exported_submissions_path(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<String> {
+        let review_grades_page = self
+            .get_gs_html(&gs_review_grades_path(course, assignment))
+            .await
+            .context("getting review grades")?;
+
+        let export_download_a = review_grades_page
+            .select(&BULK_EXPORT_A)
+            .exactly_one()
+            .map_err(|err_it| anyhow!("not exactly one export link: found {}", err_it.count()))?;
+
+        let export_download_href = export_download_a.value().attr("href");
+        debug!(?export_download_href);
+
+        let csrf_token_meta = review_grades_page
+            .select(&CSRF_TOKEN_META)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!("not exactly one CSRF token meta: found {}", err_it.count())
+            })?;
+
+        let csrf_token = csrf_token_meta
+            .value()
+            .attr("content")
+            .ok_or_else(|| anyhow!("could not get CSRF token from meta: {csrf_token_meta:?}"))?;
+        debug!(csrf_token);
+
+        match export_download_href {
+            None | Some("javascript:void(0);") => {
+                self.request_export_submissions(course, assignment, csrf_token)
+                    .await
+            }
+            Some(path) => Ok(path.to_owned()),
+        }
+    }
+
+    /// Requests and waits for Gradescope to export submissions, returning the path to the export if
+    /// successful
+    async fn request_export_submissions(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+        csrf_token: &str,
+    ) -> Result<String> {
+        let request = self
+            .post_gs_request(&gs_assignment_path(course, assignment, "/export"))
+            .await;
+
+        let status_path = self
+            .ajax(request, csrf_token)
+            .send()
+            .await
+            .context("could not request submission export")?
+            .error_for_status()
+            .context("error requesting submission export")?
+            .json::<ExportSubmissionsResponse>()
+            .await?
+            .status_path(course);
+
+        self.await_export_completion(course, &status_path, csrf_token)
+            .await
+    }
+
+    #[tracing::instrument(skip(self), err, ret)]
+    async fn await_export_completion(
+        &self,
+        course: &Course,
+        status_path: &str,
+        csrf_token: &str,
+    ) -> Result<String> {
+        loop {
+            let request = self.get_gs_request(status_path).await;
+
+            let status = self
+                .ajax(request, csrf_token)
+                .send()
+                .await
+                .context("could not check on export status")?
+                .error_for_status()
+                .context("error checking on export status")?
+                .json::<ExportSubmissionsStatus>()
+                .await?;
+
+            if status.completed() {
+                info!("export complete!");
+                break Ok(status.download_path(course));
+            }
+
+            info!(
+                progress = status.progress(),
+                status = status.status(),
+                "still waiting on export..."
+            );
+            debug!(?status, "complete export status");
+        }
     }
 }
 
@@ -359,3 +467,49 @@ pub struct Auth;
 pub trait ClientState {}
 impl ClientState for Init {}
 impl ClientState for Auth {}
+
+#[derive(Deserialize)]
+struct ExportSubmissionsResponse {
+    generated_file_id: u64,
+}
+
+impl ExportSubmissionsResponse {
+    pub fn status_path(&self, course: &Course) -> String {
+        gs_course_path(
+            course,
+            &format!("/generated_files/{}.json", self.generated_file_id),
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportSubmissionsStatus {
+    id: u64,
+    progress: f32,
+    status: String,
+}
+
+impl ExportSubmissionsStatus {
+    pub fn completed(&self) -> bool {
+        match self.status.as_str() {
+            "processing" => false,
+            "completed" => true,
+            status => {
+                warn!(%status, complete_status = ?self, "unexpected export status");
+                false
+            }
+        }
+    }
+
+    pub fn download_path(&self, course: &Course) -> String {
+        gs_course_path(course, &format!("/generated_files/{}.zip", self.id))
+    }
+
+    pub fn progress(&self) -> f32 {
+        self.progress
+    }
+
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+}
