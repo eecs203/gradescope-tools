@@ -30,7 +30,7 @@ impl fmt::Debug for Creds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Creds")
             .field("email", &self.email)
-            .field("password", &"*****")
+            .field("password", &"<hidden>")
             .finish()
     }
 }
