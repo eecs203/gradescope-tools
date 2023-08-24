@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::time::Duration;
 use std::{io, thread};
 
 use anyhow::{anyhow, bail, Context as AnyhowContext, Result};
@@ -11,21 +10,15 @@ use pdf::content::{Op, TextDrawAdjusted};
 use pdf::file::{CachedFile, FileOptions};
 use pdf::object::{Page, PageRc, Ref, Resolve, XObject};
 use pdf::PdfError;
-use reqwest::RequestBuilder;
+use reqwest::Response;
 use tokio::runtime::Handle;
 use tracing::{debug, info, trace};
 
 use crate::submission::SubmissionId;
 use crate::types::QuestionNumber;
 
-pub async fn download_submission_export(
-    request: RequestBuilder,
-) -> Result<impl AsyncBufRead + Unpin> {
-    Ok(request
-        .timeout(Duration::from_secs(30 * 60))
-        .send()
-        .await
-        .context("export download failed")?
+pub async fn download_submission_export(response: Response) -> Result<impl AsyncBufRead + Unpin> {
+    Ok(response
         .bytes_stream()
         .inspect_ok(|bytes| trace!(num_bytes = bytes.len(), "got byte chunk"))
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))

@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
     println!("Errors:");
     for result in results.iter() {
         if let Err(err) = result {
-            println!("{err}");
+            println!("{err:#}");
         }
     }
     println!();
