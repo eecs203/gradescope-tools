@@ -6,9 +6,10 @@ use futures::Stream;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
-use reqwest::{Client as HttpClient, RequestBuilder, Response};
+use reqwest::{Client as HttpClient, Method, RequestBuilder, Response};
 use scraper::{ElementRef, Html};
 use serde::Deserialize;
+use tokio::sync::MutexGuard;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -19,6 +20,7 @@ use crate::creds::Creds;
 use crate::export_submissions::{
     download_submission_export, files_as_submissions, read_zip, SubmissionPdf,
 };
+use crate::rate_limit::RateLimited;
 use crate::regrade::Regrade;
 use crate::submission::{SubmissionId, SubmissionsManagerProps};
 use crate::types::{GraderName, Points, QuestionTitle, StudentName};
@@ -53,49 +55,50 @@ selectors! {
 }
 
 pub struct Client<State: ClientState> {
-    client: HttpClient,
+    client: RateLimited<HttpClient>,
     creds: Creds,
     _state: State,
 }
 
 impl<State: ClientState> Client<State> {
-    async fn get_gs_html(&self, path: &str) -> Result<Html> {
-        let text = self.get_gs_response(path).await?.text().await?;
-        Ok(Html::parse_document(&text))
+    async fn http_client(&self) -> MutexGuard<HttpClient> {
+        self.client.get().await
     }
 
-    async fn get_gs_request(&self, path: &str) -> RequestBuilder {
-        sleep(Duration::from_millis(1000)).await;
-
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn gs(&self, method: Method, path: &str) -> RequestBuilder {
         let url = gs_url(path);
-        info!(%url, "sending GS request");
+        info!(%url, %method, "preparing GS request");
 
-        self.client.get(url).header("Accept", "text/html")
+        self.http_client().await.request(method, url)
     }
 
-    async fn get_gs_response(&self, path: &str) -> Result<Response> {
-        self.get_gs_request(path)
+    #[tracing::instrument(level = "debug", skip(self, csrf_token))]
+    async fn gs_ajax(&self, method: Method, path: &str, csrf_token: &str) -> RequestBuilder {
+        self.gs(method, path)
             .await
-            .send()
-            .await
-            .context("Gradescope request failed")?
-            .error_for_status()
-            .context("Gradescope responded with an error")
-    }
-
-    async fn post_gs_request(&self, path: &str) -> RequestBuilder {
-        sleep(Duration::from_millis(1000)).await;
-
-        let url = gs_url(path);
-        info!(%url, "sending GS POST request");
-
-        self.client.post(url)
-    }
-
-    fn ajax(&self, request: RequestBuilder, csrf_token: &str) -> RequestBuilder {
-        request
             .header("X-Requested-With", "XMLHttpRequest")
             .header("X-CSRF-Token", csrf_token)
+    }
+
+    async fn send(&self, request: RequestBuilder) -> Result<Response> {
+        let response = request
+            .send()
+            .await
+            .context("GS request failed")?
+            .error_for_status()
+            .context("GS responded with an error")?;
+        Ok(response)
+    }
+
+    async fn get_gs_html(&self, path: &str) -> Result<Html> {
+        let request = self
+            .gs(Method::GET, path)
+            .await
+            .header("Accept", "text/html");
+        let response = self.send(request).await?;
+        let text = response.text().await?;
+        Ok(Html::parse_document(&text))
     }
 }
 
@@ -124,7 +127,7 @@ impl Client<Init> {
         client.get(BASE_URL).send().await?;
 
         Ok(Self {
-            client,
+            client: RateLimited::new(client, Duration::from_secs(1)),
             creds,
             _state: Init,
         })
@@ -145,12 +148,8 @@ impl Client<Init> {
             login_data
         };
 
-        let response = self
-            .client
-            .post(gs_url(LOGIN_PATH))
-            .form(&login_data)
-            .send()
-            .await?;
+        let request = self.gs(Method::POST, LOGIN_PATH).await.form(&login_data);
+        let response = self.send(request).await?;
 
         if response.status().is_redirection() {
             Ok(Client {
@@ -349,10 +348,14 @@ impl Client<Auth> {
         course: &Course,
         assignment: &Assignment,
     ) -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>> {
-        let export_download_path = self.exported_submissions_path(course, assignment).await?;
+        let path = self.exported_submissions_path(course, assignment).await?;
+        let request = self
+            .gs(Method::GET, &path)
+            .await
+            .timeout(Duration::from_secs(60 * 60));
+        let response = self.send(request).await?;
 
-        let request = self.get_gs_request(&export_download_path).await;
-        let zip = download_submission_export(request).await?;
+        let zip = download_submission_export(response).await?;
         let files = read_zip(zip);
         let submissions = files_as_submissions(files);
 
@@ -379,25 +382,29 @@ impl Client<Auth> {
         let export_download_href = export_download_a.value().attr("href");
         debug!(?export_download_href);
 
-        let csrf_token_meta = review_grades_page
-            .select(&CSRF_TOKEN_META)
-            .exactly_one()
-            .map_err(|err_it| {
-                anyhow!("not exactly one CSRF token meta: found {}", err_it.count())
-            })?;
-
-        let csrf_token = csrf_token_meta
-            .value()
-            .attr("content")
-            .ok_or_else(|| anyhow!("could not get CSRF token from meta: {csrf_token_meta:?}"))?;
-        debug!(csrf_token);
-
         match export_download_href {
             None | Some("javascript:void(0);") => {
+                info!("must request export");
+
+                let csrf_token_meta = review_grades_page
+                    .select(&CSRF_TOKEN_META)
+                    .exactly_one()
+                    .map_err(|err_it| {
+                        anyhow!("not exactly one CSRF token meta: found {}", err_it.count())
+                    })?;
+
+                let csrf_token = csrf_token_meta.value().attr("content").ok_or_else(|| {
+                    anyhow!("could not get CSRF token from meta: {csrf_token_meta:?}")
+                })?;
+                debug!(csrf_token);
+
                 self.request_export_submissions(course, assignment, csrf_token)
                     .await
             }
-            Some(path) => Ok(path.to_owned()),
+            Some(path) => {
+                info!("submissions were already exported");
+                Ok(path.to_owned())
+            }
         }
     }
 
@@ -409,17 +416,11 @@ impl Client<Auth> {
         assignment: &Assignment,
         csrf_token: &str,
     ) -> Result<String> {
-        let request = self
-            .post_gs_request(&gs_assignment_path(course, assignment, "/export"))
-            .await;
+        let path = gs_assignment_path(course, assignment, "/export");
+        let request = self.gs_ajax(Method::POST, &path, csrf_token).await;
+        let response = self.send(request).await?;
 
-        let status_path = self
-            .ajax(request, csrf_token)
-            .send()
-            .await
-            .context("could not request submission export")?
-            .error_for_status()
-            .context("error requesting submission export")?
+        let status_path = response
             .json::<ExportSubmissionsResponse>()
             .await?
             .status_path(course);
@@ -436,17 +437,10 @@ impl Client<Auth> {
         csrf_token: &str,
     ) -> Result<String> {
         loop {
-            let request = self.get_gs_request(status_path).await;
+            let request = self.gs_ajax(Method::GET, status_path, csrf_token).await;
+            let response = self.send(request).await?;
 
-            let status = self
-                .ajax(request, csrf_token)
-                .send()
-                .await
-                .context("could not check on export status")?
-                .error_for_status()
-                .context("error checking on export status")?
-                .json::<ExportSubmissionsStatus>()
-                .await?;
+            let status = response.json::<ExportSubmissionsStatus>().await?;
 
             if status.completed() {
                 info!("export complete!");
@@ -458,6 +452,7 @@ impl Client<Auth> {
                 status = status.status(),
                 "still waiting on export..."
             );
+            sleep(Duration::from_secs(5)).await;
         }
     }
 }
