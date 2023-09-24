@@ -1,6 +1,6 @@
 use core::fmt;
-use std::ops::Deref;
 
+use gradescope_api::assignment::AssignmentName;
 use gradescope_api::submission::{StudentSubmitter, SubmissionId};
 use gradescope_api::types::{Email, QuestionNumber, StudentName};
 use itertools::Itertools;
@@ -35,12 +35,8 @@ pub struct UnmatchedStudents {
 }
 
 impl UnmatchedStudents {
-    pub fn new(students: &[&StudentSubmitter]) -> Self {
-        let students = students
-            .iter()
-            .map(Deref::deref)
-            .map(UnmatchedStudent::new)
-            .collect();
+    pub fn new(students: &[StudentSubmitter]) -> Self {
+        let students = students.iter().map(UnmatchedStudent::new).collect();
 
         Self { students }
     }
@@ -102,23 +98,24 @@ impl fmt::Display for UnmatchedQuestions {
 #[derive(Debug, Clone)]
 pub struct UnmatchedReport {
     submission_id: SubmissionId,
+    assignment_name: AssignmentName,
     students: UnmatchedStudents,
     unmatched: UnmatchedQuestions,
 }
 
 impl UnmatchedReport {
     pub fn new(
-        (submission_id, students, unmatched): (
-            SubmissionId,
-            &Vec<&StudentSubmitter>,
-            Vec<QuestionNumber>,
-        ),
+        submission_id: SubmissionId,
+        assignment_name: AssignmentName,
+        students: &[StudentSubmitter],
+        unmatched: Vec<QuestionNumber>,
     ) -> Self {
         let students = UnmatchedStudents::new(students);
         let unmatched = UnmatchedQuestions::new(unmatched);
 
         Self {
             submission_id,
+            assignment_name,
             students,
             unmatched,
         }
@@ -133,8 +130,8 @@ impl fmt::Display for UnmatchedReport {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}:\n\nWe found {} unmatched questions in your submission {}: {}\n\nIf you would like these questions to be graded, please match pages for them as soon as possible.\n\n- EECS 203",
-            self.students, self.unmatched.questions().len(), self.submission_id, self.unmatched,
+            "{}:\n\nWe found {} unmatched question(s) in your submission for {}: {}\n\nIf you would like these questions to be graded, please match pages for them as soon as possible.\n\n- EECS 203",
+            self.students, self.unmatched.questions().len(), self.assignment_name, self.unmatched,
         )
     }
 }
