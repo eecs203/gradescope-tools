@@ -5,4 +5,6 @@ members = [
     "app-utils",
     "gradescope-to-db",
     "notify-unmatched-pages",
+    "server",
 ]
+resolver = "2"

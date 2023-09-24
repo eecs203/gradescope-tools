@@ -63,7 +63,7 @@ impl SubmissionsManagerProps {
 
     pub fn submission_to_student_map(
         &self,
-    ) -> Result<HashMap<SubmissionId, Vec<&StudentSubmitter>>> {
+    ) -> Result<HashMap<SubmissionId, Vec<StudentSubmitter>>> {
         let id_to_student = self.id_to_student_map();
 
         self.submissions
@@ -84,14 +84,13 @@ impl SubmissionsManagerProps {
                         .active_user_ids
                         .iter()
                         .filter_map(|id| {
-                            let student = id_to_student
-                                .get(id)
-                                .copied();
+                            let student = id_to_student.get(id).copied().cloned();
                             if student.is_none() {
                                 warn!("could not find student with id {id} for submission {submission:?}; they were likely removed from the roster");
                             }
                             student
-                        }).collect();
+                        })
+                        .collect();
                     Ok((id.clone(), students))
                 }
                 Err(err) => Err(err),

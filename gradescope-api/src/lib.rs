@@ -1,4 +1,5 @@
 pub mod assignment;
+pub mod assignment_selector;
 pub mod client;
 pub mod course;
 pub mod creds;

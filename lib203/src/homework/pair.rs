@@ -146,7 +146,7 @@ impl<T> IntoIterator for SamePair<T> {
     type IntoIter = iter::Chain<option::IntoIter<T>, option::IntoIter<T>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.gw.into_iter().chain(self.id.into_iter())
+        self.gw.into_iter().chain(self.id)
     }
 }
 

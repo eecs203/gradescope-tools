@@ -14,3 +14,4 @@ Created at [EECS 203](https://eecs203.github.io/eecs203.org/) at the University 
 
 - [`gradescope-to-db`](gradescope-to-db/): Scrape course data into a database for easier access and analysis
 - [`notify-unmatched-pages`](notify-unmatched-pages/): Notify submitters who have not matched pages for an assignment
+- [`server`](server/): Server software to invoke and manage the apps remotely

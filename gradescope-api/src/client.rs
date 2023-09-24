@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures::Stream;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
 use reqwest::{Client as HttpClient, Method, RequestBuilder, Response};
@@ -225,6 +225,7 @@ impl Client<Auth> {
         Ok(assignments)
     }
 
+    // TODO: report failure
     fn parse_assignment(row: ElementRef) -> Option<Assignment> {
         let mut entries = row.select(&TD);
 
@@ -362,54 +363,83 @@ impl Client<Auth> {
         Ok(submissions)
     }
 
-    /// Get the path to the exported submissions, possibly requesting that Gradescope perform the
-    /// export if it has not yet done so. This can take substantial time (i.e. easily >10 minutes).
+    /// Get the path to the exported submissions
     async fn exported_submissions_path(
         &self,
         course: &Course,
         assignment: &Assignment,
     ) -> Result<String> {
-        let review_grades_page = self
-            .get_gs_html(&gs_review_grades_path(course, assignment))
-            .await
-            .context("getting review grades")?;
+        // `Html` is non-`Send`, and Rust complains if it's not dropped before an await point. The
+        // function should be correct without this block, but the compiler can't tell.
+        let result = {
+            let review_grades_page = self
+                .get_gs_html(&gs_review_grades_path(course, assignment))
+                .await
+                .context("getting review grades")?;
 
+            let export_download_href = Self::export_download_href(&review_grades_page)?;
+            debug!(?export_download_href);
+
+            match export_download_href {
+                Some(path) => {
+                    info!("submissions were already exported");
+                    Either::Left(path.to_owned())
+                }
+                None => {
+                    info!("must request export");
+
+                    let csrf_token = Self::csrf_token_from_meta(&review_grades_page)?;
+                    debug!(csrf_token);
+
+                    Either::Right(csrf_token.to_owned())
+                }
+            }
+        };
+
+        match result {
+            Either::Left(path) => Ok(path),
+            Either::Right(csrf_token) => {
+                self.request_export_submissions(course, assignment, &csrf_token)
+                    .await
+            }
+        }
+    }
+
+    fn export_download_href(review_grades_page: &Html) -> Result<Option<&str>> {
         let export_download_a = review_grades_page
             .select(&BULK_EXPORT_A)
             .exactly_one()
             .map_err(|err_it| anyhow!("not exactly one export link: found {}", err_it.count()))?;
 
-        let export_download_href = export_download_a.value().attr("href");
-        debug!(?export_download_href);
-
-        match export_download_href {
-            None | Some("javascript:void(0);") => {
-                info!("must request export");
-
-                let csrf_token_meta = review_grades_page
-                    .select(&CSRF_TOKEN_META)
-                    .exactly_one()
-                    .map_err(|err_it| {
-                        anyhow!("not exactly one CSRF token meta: found {}", err_it.count())
-                    })?;
-
-                let csrf_token = csrf_token_meta.value().attr("content").ok_or_else(|| {
-                    anyhow!("could not get CSRF token from meta: {csrf_token_meta:?}")
-                })?;
-                debug!(csrf_token);
-
-                self.request_export_submissions(course, assignment, csrf_token)
-                    .await
+        let href = export_download_a.value().attr("href").and_then(|href| {
+            if href != "javascript:void(0);" {
+                Some(href)
+            } else {
+                None
             }
-            Some(path) => {
-                info!("submissions were already exported");
-                Ok(path.to_owned())
-            }
-        }
+        });
+
+        Ok(href)
+    }
+
+    fn csrf_token_from_meta(review_grades_page: &Html) -> Result<&str> {
+        let csrf_token_meta = review_grades_page
+            .select(&CSRF_TOKEN_META)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!("not exactly one CSRF token meta: found {}", err_it.count())
+            })?;
+
+        let csrf_token = csrf_token_meta
+            .value()
+            .attr("content")
+            .ok_or_else(|| anyhow!("could not get CSRF token from meta: {csrf_token_meta:?}"))?;
+
+        Ok(csrf_token)
     }
 
     /// Requests and waits for Gradescope to export submissions, returning the path to the export if
-    /// successful
+    /// successful. This can take substantial time (i.e. easily >10 minutes).
     async fn request_export_submissions(
         &self,
         course: &Course,
