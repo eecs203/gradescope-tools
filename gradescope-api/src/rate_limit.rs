@@ -1,3 +1,4 @@
+use core::fmt;
 use std::time::Duration;
 
 use tokio::sync::{Mutex, MutexGuard};
@@ -20,5 +21,11 @@ impl<T> RateLimited<T> {
         let guard = self.t.lock().await;
         sleep(self.delay).await;
         guard
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for RateLimited<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("RateLimited").field(&self.t).finish()
     }
 }

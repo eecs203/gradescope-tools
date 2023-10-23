@@ -1,9 +1,82 @@
 use std::fmt;
 
+use anyhow::Result;
+use futures::AsyncRead;
 use serde::Deserialize;
 use serde_with::serde_conv;
 
+use crate::course::CourseClient;
+use crate::submission::SubmissionToStudentMap;
+use crate::submission_export::SubmissionExport;
 use crate::types::Points;
+
+#[derive(Debug, Clone)]
+pub struct Assignment {
+    id: AssignmentId,
+    name: AssignmentName,
+    points: Points,
+}
+
+impl Assignment {
+    pub fn new(id: AssignmentId, name: AssignmentName, points: Points) -> Self {
+        Self { id, name, points }
+    }
+
+    pub fn id(&self) -> &AssignmentId {
+        &self.id
+    }
+
+    pub fn name(&self) -> &AssignmentName {
+        &self.name
+    }
+
+    pub fn points(&self) -> Points {
+        self.points
+    }
+}
+
+pub struct AssignmentClient<'a> {
+    course_client: CourseClient<'a>,
+    assignment: &'a Assignment,
+}
+
+impl<'a> AssignmentClient<'a> {
+    pub fn new(course_client: CourseClient<'a>, assignment: &'a Assignment) -> Self {
+        Self {
+            course_client,
+            assignment,
+        }
+    }
+
+    pub fn assignment(&self) -> &'a Assignment {
+        self.assignment
+    }
+
+    pub async fn download_submission_export(
+        &self,
+    ) -> Result<SubmissionExport<impl AsyncRead + Unpin>> {
+        let gradescope = self.course_client.gradescope();
+        let course = self.course_client.course();
+
+        let export = gradescope
+            .export_submissions(course, self.assignment)
+            .await?;
+
+        Ok(export)
+    }
+
+    pub async fn submission_to_student_map(&self) -> Result<SubmissionToStudentMap> {
+        let gradescope = self.course_client.gradescope();
+        let course = self.course_client.course();
+
+        let submission_to_student_map = gradescope
+            .get_submissions_metadata(course, self.assignment)
+            .await?
+            .submission_to_student_map()?;
+
+        Ok(submission_to_student_map)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 #[serde(transparent)]
@@ -35,31 +108,6 @@ serde_conv! {
         Ok(AssignmentId {
             id: value.to_string(),
         })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Assignment {
-    id: AssignmentId,
-    name: AssignmentName,
-    points: Points,
-}
-
-impl Assignment {
-    pub fn new(id: AssignmentId, name: AssignmentName, points: Points) -> Self {
-        Self { id, name, points }
-    }
-
-    pub fn id(&self) -> &AssignmentId {
-        &self.id
-    }
-
-    pub fn name(&self) -> &AssignmentName {
-        &self.name
-    }
-
-    pub fn points(&self) -> Points {
-        self.points
     }
 }
 

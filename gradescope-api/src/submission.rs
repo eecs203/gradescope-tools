@@ -1,5 +1,6 @@
 use core::fmt;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
@@ -61,12 +62,10 @@ impl SubmissionsManagerProps {
             .collect()
     }
 
-    pub fn submission_to_student_map(
-        &self,
-    ) -> Result<HashMap<SubmissionId, Vec<StudentSubmitter>>> {
+    pub fn submission_to_student_map(&self) -> Result<SubmissionToStudentMap> {
         let id_to_student = self.id_to_student_map();
 
-        self.submissions
+        let map: HashMap<_, _> = self.submissions
             .iter()
             .map(|(id, submission)| {
                 if id == &submission.id {
@@ -90,12 +89,14 @@ impl SubmissionsManagerProps {
                             }
                             student
                         })
-                        .collect();
+                        .collect_vec();
                     Ok((id.clone(), students))
                 }
                 Err(err) => Err(err),
             })
-            .try_collect()
+            .try_collect()?;
+
+        Ok(SubmissionToStudentMap::new(map))
     }
 }
 
@@ -125,4 +126,17 @@ struct Submission {
     id: SubmissionId,
     #[serde_as(as = "Vec<StudentIdAsInt>")]
     active_user_ids: Vec<StudentId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubmissionToStudentMap(Rc<HashMap<SubmissionId, Vec<StudentSubmitter>>>);
+
+impl SubmissionToStudentMap {
+    pub fn new(map: HashMap<SubmissionId, Vec<StudentSubmitter>>) -> Self {
+        Self(Rc::new(map))
+    }
+
+    pub fn students<'a>(&'a self, submission_id: &SubmissionId) -> Option<&'a [StudentSubmitter]> {
+        self.0.get(submission_id).map(Vec::as_slice)
+    }
 }
