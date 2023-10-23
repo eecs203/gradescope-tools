@@ -53,7 +53,7 @@ async fn add_assignment(
 
 async fn insert_course(db_pool: &SqlitePool, course: &Course) -> Result<()> {
     let mut db = db_pool.acquire().await?;
-    let (id, short_name, name) = (course.id(), course.short_name(), course.name());
+    let (id, short_name, name) = (course.id().as_str(), course.short_name(), course.name());
 
     sqlx::query!(
         "
@@ -78,7 +78,7 @@ async fn insert_assignment(
     let mut db = db_pool.acquire().await?;
     let (id, course_id, name, points) = (
         assignment.id().as_str(),
-        course.id(),
+        course.id().as_str(),
         assignment.name().as_str(),
         assignment.points().as_f32(),
     );

@@ -4,11 +4,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use app_utils::{init_from_env, InitFromEnv};
 use dotenvy::dotenv;
+use futures::future::{join, try_join};
 use futures::{future, StreamExt, TryStreamExt};
+use gradescope_api::assignment::AssignmentClient;
 use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::client::Client;
+use gradescope_api::course::CourseClient;
 use log::{init_tracing, SlackLayer};
-use notify_unmatched_pages::unmatched_page_reports;
+use notify_unmatched_pages::report::UnmatchedReport;
 use slack_morphism::prelude::*;
 use tokio::time::{interval_at, Instant};
 use tracing::{debug, error, info, trace};
@@ -123,7 +126,24 @@ async fn notify_unmatched_pages(
         .context("could not get assignment")?;
     debug!(?assignment, "got target assignment");
 
-    let reports = unmatched_page_reports(&gradescope, &course, assignment).await?;
+    let course_client = CourseClient::new(&gradescope, &course);
+
+    let assignment_client = course_client.with_assignment(assignment);
+
+    let (submission_export, submission_to_student_map) = try_join(
+        assignment_client.download_submission_export(),
+        assignment_client.submission_to_student_map(),
+    )
+    .await?;
+
+    let nonmatching_submitters = submission_export
+        .submissions()
+        .unmatched()
+        .submitters(submission_to_student_map);
+
+    let reports = nonmatching_submitters.map_ok(|nonmatching_submitter| {
+        UnmatchedReport::new(&course, assignment, nonmatching_submitter)
+    });
 
     let session = client.open_session(&token);
 

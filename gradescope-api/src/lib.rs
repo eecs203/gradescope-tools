@@ -7,6 +7,8 @@ pub mod export_submissions;
 pub mod rate_limit;
 pub mod regrade;
 pub mod submission;
+pub mod submission_export;
 pub mod types;
+pub mod unmatched;
 
 mod util;

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::Stream;
+use futures::{AsyncRead, Stream};
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
@@ -15,14 +15,14 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::assignment::{Assignment, AssignmentId, AssignmentName};
-use crate::course::{Course, Role};
+use crate::course::{Course, CourseId, Role};
 use crate::creds::Creds;
-use crate::export_submissions::{
-    download_submission_export, files_as_submissions, read_zip, SubmissionPdf,
-};
+use crate::export_submissions::{download_submission_export, files_as_submissions, read_zip};
 use crate::rate_limit::RateLimited;
 use crate::regrade::Regrade;
 use crate::submission::{SubmissionId, SubmissionsManagerProps};
+use crate::submission_export::pdf::SubmissionPdf;
+use crate::submission_export::{submissions_export_from_response, SubmissionExport};
 use crate::types::{GraderName, Points, QuestionTitle, StudentName};
 use crate::util::*;
 
@@ -54,6 +54,7 @@ selectors! {
     CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
+#[derive(Debug)]
 pub struct Client<State: ClientState> {
     client: RateLimited<HttpClient>,
     creds: Creds,
@@ -206,7 +207,7 @@ impl Client<Auth> {
     }
 
     fn parse_course(course_box: ElementRef, user_role: Role) -> Option<Course> {
-        let id = id_from_link(course_box)?;
+        let id = CourseId::new(id_from_link(course_box)?);
         let short_name = text(course_box.select(&COURSE_SHORT_NAME).next()?);
         let name = text(course_box.select(&COURSE_NAME).next()?);
         Some(Course::new(id, short_name, name, user_role))
@@ -344,7 +345,23 @@ impl Client<Auth> {
         Ok(submissions_manager_props)
     }
 
+    // TODO: reimplement checking/getting path
     pub async fn export_submissions(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<SubmissionExport<impl AsyncRead + Unpin>> {
+        let path = self.exported_submissions_path(course, assignment).await?;
+        let request = self
+            .gs(Method::GET, &path)
+            .await
+            .timeout(Duration::from_secs(60 * 60));
+        let response = self.send(request).await?;
+        let export = submissions_export_from_response(response);
+        Ok(export)
+    }
+
+    pub async fn export_submissions_old(
         &self,
         course: &Course,
         assignment: &Assignment,
@@ -487,7 +504,9 @@ impl Client<Auth> {
     }
 }
 
+#[derive(Debug)]
 pub struct Init;
+#[derive(Debug)]
 pub struct Auth;
 
 pub trait ClientState {}
