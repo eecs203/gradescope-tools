@@ -1,11 +1,17 @@
 use core::fmt;
 
+use anyhow::{Context, Result};
 use gradescope_api::assignment::{Assignment, AssignmentId, AssignmentName};
 use gradescope_api::course::{Course, CourseId};
 use gradescope_api::submission::{StudentSubmitter, SubmissionId};
 use gradescope_api::types::{Email, QuestionNumber, StudentName};
 use gradescope_api::unmatched::{NonmatchingSubmitter, UnmatchedQuestion};
 use itertools::Itertools;
+use lettre::message::header::ContentType;
+use lettre::message::Mailbox;
+use lettre::{Address, AsyncSendmailTransport, Message};
+
+use crate::sender::Sender;
 
 #[derive(Debug, Clone)]
 pub struct UnmatchedStudent {
@@ -22,6 +28,20 @@ impl UnmatchedStudent {
 
     pub fn name(&self) -> &StudentName {
         &self.name
+    }
+
+    pub fn email(&self) -> &Email {
+        &self.email
+    }
+
+    pub fn mailbox(&self) -> Result<Mailbox> {
+        let address = self
+            .email
+            .to_string()
+            .parse()
+            .context("could not parse student email")?;
+        let name = self.name().to_string();
+        Ok(Mailbox::new(Some(name), address))
     }
 }
 
@@ -104,10 +124,40 @@ impl<'a> UnmatchedReport<'a> {
         }
     }
 
+    pub fn send_as_email(&self, sender: &Sender) -> Result<()> {
+        // let message = Message::builder()
+        //     .from(sender.from().clone())
+        //     .to(self.student.mailbox()?)
+        //     .subject("Page Matching Notification")
+        //     .header(ContentType::TEXT_PLAIN)
+        //     .body(body);
+        // let mailer = AsyncSendmailTransport::new();
+        todo!()
+    }
+
     pub fn page_matching_link(&self) -> String {
         format!(
             "https://www.gradescope.com/courses/{}/assignments/{}/submissions/{}/select_pages",
             self.course_id, self.assignment_id, self.submission_id
+        )
+    }
+
+    pub fn csv_string(&self) -> String {
+        let (questions, these, them) = if self.unmatched.questions().len() == 1 {
+            // Singular
+            ("question", "this", "it")
+        } else {
+            // Plural
+            ("questions", "these", "them")
+        };
+
+        format!(
+            "{};{};We found {} unmatched {questions} in your submission for {}: {}",
+            self.student.name(),
+            self.student.email(),
+            self.unmatched.questions().len(),
+            self.assignment_name,
+            self.unmatched,
         )
     }
 }

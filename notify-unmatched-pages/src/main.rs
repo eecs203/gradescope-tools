@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::Result;
 use app_utils::{init_from_env, init_tracing, InitFromEnv};
 use futures::future::try_join;
@@ -7,6 +9,7 @@ use gradescope_api::course::CourseClient;
 use gradescope_api::export_submissions::{files_as_submissions, read_zip};
 use gradescope_api::submission::{SubmissionId, SubmissionsManagerProps};
 use gradescope_api::submission_export::pdf::SubmissionPdf;
+use gradescope_api::submission_export::submissions_export_load;
 use gradescope_api::types::Points;
 use notify_unmatched_pages::report::UnmatchedReport;
 use tokio::fs::{self, File};
@@ -41,13 +44,13 @@ async fn main() -> Result<()> {
     //     .context("could not find assignment")?;
     let targets = [
         Assignment::new(
-            AssignmentId::new("3520797".to_owned()),
-            AssignmentName::new("Homework 6".to_owned()),
+            AssignmentId::new("3559463".to_owned()),
+            AssignmentName::new("Homework 7".to_owned()),
             Points::new(100.0).unwrap(),
         ),
         Assignment::new(
-            AssignmentId::new("3520799".to_owned()),
-            AssignmentName::new("Groupwork 6".to_owned()),
+            AssignmentId::new("3559523".to_owned()),
+            AssignmentName::new("Groupwork 7".to_owned()),
             Points::new(30.0).unwrap(),
         ),
     ];
@@ -58,24 +61,48 @@ async fn main() -> Result<()> {
         .iter()
         .map(|assignment| course_client.with_assignment(assignment));
 
-    let reports = stream::iter(assignment_clients)
-        .then(|client| async move {
-            let (submission_export, submission_to_student_map) = try_join(
-                client.download_submission_export(),
-                client.submission_to_student_map(),
-            )
-            .await?;
+    // let exports: Vec<_> = stream::iter(assignment_clients)
+    //     .map(|client| async move {
+    //         anyhow::Ok((
+    //             client.assignment(),
+    //             try_join(
+    //                 client.download_submission_export(),
+    //                 client.submission_to_student_map(),
+    //             )
+    //             .await?,
+    //         ))
+    //     })
+    //     .buffer_unordered(8)
+    //     .try_collect()
+    //     .await?;
 
-            let assignment = client.assignment();
-
-            let reports = submission_export
-                .submissions()
-                .unmatched()
-                .submitters(submission_to_student_map)
-                .map_ok(move |submitter| (submitter, assignment));
-
-            anyhow::Ok(reports)
+    let exports: Vec<_> = stream::iter(assignment_clients.zip(vec!["out/hw7.zip", "out/gw7.zip"]))
+        .map(|(client, path)| async move {
+            anyhow::Ok((
+                client.assignment(),
+                try_join(
+                    submissions_export_load(path),
+                    client.submission_to_student_map(),
+                )
+                .await?,
+            ))
         })
+        .buffer_unordered(8)
+        .try_collect()
+        .await?;
+
+    let reports = stream::iter(exports)
+        .then(
+            |(assignment, (submission_export, submission_to_student_map))| async move {
+                let reports = submission_export
+                    .submissions()
+                    .unmatched()
+                    .submitters(submission_to_student_map)
+                    .map_ok(move |submitter| (submitter, assignment));
+
+                anyhow::Ok(reports)
+            },
+        )
         .try_flatten()
         .map_ok(|(submitter, assignment)| UnmatchedReport::new(&course, assignment, submitter))
         .inspect_err(|err| error!(%err, "error getting nonmatching submitters"))
@@ -86,9 +113,10 @@ async fn main() -> Result<()> {
 
     println!("Reports:");
     for report in reports.iter().flatten() {
-        println!("{report}");
-        println!("{}", report.page_matching_link());
-        println!("\n----------\n");
+        // println!("{report}");
+        // println!("{}", report.page_matching_link());
+        println!("{}", report.csv_string());
+        // println!("\n----------\n");
     }
     println!();
 
@@ -112,11 +140,4 @@ async fn load_submission_metadata() -> Result<SubmissionsManagerProps> {
     let props_json = fs::read_to_string("out/submissions_manager_props.json").await?;
     let metadata = serde_json::from_str(&props_json)?;
     Ok(metadata)
-}
-
-async fn load_zip() -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>> {
-    let zip = File::open("out/submissions.zip").await?.compat();
-    let files = read_zip(zip);
-    let submissions = files_as_submissions(files);
-    Ok(submissions)
 }
