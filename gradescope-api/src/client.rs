@@ -497,7 +497,7 @@ impl Client<Auth> {
                 status = status.status(),
                 "still waiting on export..."
             );
-            sleep(Duration::from_secs(5)).await;
+            sleep(Duration::from_secs(10)).await;
         }
     }
 }
@@ -535,7 +535,7 @@ struct ExportSubmissionsStatus {
 impl ExportSubmissionsStatus {
     pub fn completed(&self) -> bool {
         match self.status.as_str() {
-            "processing" => false,
+            "unprocessed" | "processing" => false,
             "completed" => true,
             status => {
                 warn!(%status, complete_status = ?self, "unexpected export status");
