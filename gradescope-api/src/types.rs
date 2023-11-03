@@ -8,7 +8,7 @@ use std::str::FromStr;
 use anyhow::{bail, Result};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use serde_with::serde_conv;
+use serde_with::{serde_as, serde_conv, DisplayFromStr};
 
 // Not just an integer because of question parts. For example, part 2 of question 3 is "3.2".
 // TODO: parse as a sequence of integers
@@ -130,7 +130,7 @@ impl fmt::Display for StudentId {
     }
 }
 
-serde_conv!(
+serde_conv! {
     pub(crate) StudentIdAsInt,
     StudentId,
     |student_id: &StudentId| student_id.id.parse::<u64>().unwrap(),
@@ -139,7 +139,7 @@ serde_conv!(
             id: value.to_string(),
         })
     }
-);
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(transparent)]
@@ -153,8 +153,11 @@ impl fmt::Display for Email {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[serde_as]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
+#[serde(transparent)]
 pub struct Points {
+    #[serde_as(as = "DisplayFromStr")]
     points: f32,
 }
 

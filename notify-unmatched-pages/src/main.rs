@@ -1,19 +1,14 @@
-use std::path::Path;
-
 use anyhow::Result;
 use app_utils::{init_from_env, init_tracing, InitFromEnv};
 use futures::future::try_join;
-use futures::{future, stream, Stream, StreamExt, TryStreamExt};
+use futures::{future, stream, StreamExt, TryStreamExt};
 use gradescope_api::assignment::{Assignment, AssignmentId, AssignmentName};
 use gradescope_api::course::CourseClient;
-use gradescope_api::export_submissions::{files_as_submissions, read_zip};
-use gradescope_api::submission::{SubmissionId, SubmissionsManagerProps};
-use gradescope_api::submission_export::pdf::SubmissionPdf;
+use gradescope_api::submission::SubmissionsManagerProps;
 use gradescope_api::submission_export::submissions_export_load;
 use gradescope_api::types::Points;
 use notify_unmatched_pages::report::UnmatchedReport;
-use tokio::fs::{self, File};
-use tokio_util::compat::TokioAsyncReadCompatExt;
+use tokio::fs;
 use tracing::{debug, error};
 
 #[tokio::main]
@@ -21,9 +16,7 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let InitFromEnv {
-        course,
-        gradescope,
-        course_name: _,
+        course, gradescope, ..
     } = init_from_env().await?;
     debug!("initialized");
 
@@ -44,13 +37,13 @@ async fn main() -> Result<()> {
     //     .context("could not find assignment")?;
     let targets = [
         Assignment::new(
-            AssignmentId::new("3559463".to_owned()),
-            AssignmentName::new("Homework 7".to_owned()),
+            AssignmentId::new("n".to_owned()),
+            AssignmentName::new("Homework n".to_owned()),
             Points::new(100.0).unwrap(),
         ),
         Assignment::new(
-            AssignmentId::new("3559523".to_owned()),
-            AssignmentName::new("Groupwork 7".to_owned()),
+            AssignmentId::new("m".to_owned()),
+            AssignmentName::new("Groupwork m".to_owned()),
             Points::new(30.0).unwrap(),
         ),
     ];
@@ -72,11 +65,9 @@ async fn main() -> Result<()> {
     //             .await?,
     //         ))
     //     })
-    //     .buffer_unordered(8)
-    //     .try_collect()
-    //     .await?;
+    //     .buffer_unordered(8);
 
-    let exports: Vec<_> = stream::iter(assignment_clients.zip(vec!["out/hw7.zip", "out/gw7.zip"]))
+    let exports = stream::iter(assignment_clients.zip(vec!["out/hw_.zip", "out/gw_.zip"]))
         .map(|(client, path)| async move {
             anyhow::Ok((
                 client.assignment(),
@@ -87,20 +78,16 @@ async fn main() -> Result<()> {
                 .await?,
             ))
         })
-        .buffer_unordered(8)
-        .try_collect()
-        .await?;
+        .buffer_unordered(8);
 
-    let reports = stream::iter(exports)
-        .then(
-            |(assignment, (submission_export, submission_to_student_map))| async move {
-                let reports = submission_export
+    let reports = exports
+        .map_ok(
+            |(assignment, (submission_export, submission_to_student_map))| {
+                submission_export
                     .submissions()
                     .unmatched()
                     .submitters(submission_to_student_map)
-                    .map_ok(move |submitter| (submitter, assignment));
-
-                anyhow::Ok(reports)
+                    .map_ok(move |submitter| (submitter, assignment))
             },
         )
         .try_flatten()

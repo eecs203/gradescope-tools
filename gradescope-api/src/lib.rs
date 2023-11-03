@@ -2,6 +2,7 @@ pub mod assignment;
 pub mod assignment_selector;
 pub mod client;
 pub mod course;
+pub mod course_selector;
 pub mod creds;
 pub mod export_submissions;
 pub mod rate_limit;

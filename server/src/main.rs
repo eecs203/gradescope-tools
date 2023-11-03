@@ -4,17 +4,14 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use app_utils::{init_from_env, InitFromEnv};
 use dotenvy::dotenv;
-use futures::future::{join, try_join};
+use futures::future::try_join;
 use futures::{future, StreamExt, TryStreamExt};
-use gradescope_api::assignment::AssignmentClient;
 use gradescope_api::assignment_selector::AssignmentSelector;
-use gradescope_api::client::Client;
 use gradescope_api::course::CourseClient;
 use log::{init_tracing, SlackLayer};
 use notify_unmatched_pages::report::UnmatchedReport;
 use slack_morphism::prelude::*;
-use tokio::time::{interval_at, Instant};
-use tracing::{debug, error, info, trace};
+use tracing::{error, info};
 
 mod log;
 mod page_match_task;
@@ -46,50 +43,20 @@ async fn main() -> Result<()> {
         socket_mode_callbacks,
     );
 
-    // Need to specify App token for Socket Mode:
     let app_token_value: SlackApiTokenValue = env::var("SLACK_APP_TOKEN").unwrap().into();
     let app_token: SlackApiToken = SlackApiToken::new(app_token_value);
-
-    // Register an app token to listen for events,
     socket_mode_listener.listen_for(&app_token).await?;
-
-    // Start WS connections calling Slack API to get WS url for the token,
-    // and wait for Ctrl-C to shutdown
-    // There are also `.start()`/`.shutdown()` available to manage manually
     socket_mode_listener.serve().await;
-
-    // // Create our Slack API token
-    // let token_value: SlackApiTokenValue = env::var("SLACK_TOKEN").unwrap().into();
-    // let token: SlackApiToken = SlackApiToken::new(token_value);
-
-    // // Create a Slack session with this token
-    // // A session is just a lightweight wrapper around your token
-    // // not to specify it all the time for series of calls.
-    // let session = client.open_session(&token);
-
-    // // Make your first API call (which is `api.test` here)
-    // let test: SlackApiTestResponse = session
-    //     .api_test(&SlackApiTestRequest::new().with_foo("Test".into()))
-    //     .await?;
-
-    // // Send a simple text message
-    // let post_chat_req = SlackApiChatPostMessageRequest::new(
-    //     "#gradescope-scraper-messages".into(),
-    //     SlackMessageContent::new().with_text("Hey there!".into()),
-    // );
-
-    // let post_chat_resp = session.chat_post_message(&post_chat_req).await?;
 
     Ok(())
 }
 
+#[tracing::instrument(skip(client, _states), ret, err)]
 async fn on_command_event(
     event: SlackCommandEvent,
     client: Arc<SlackHyperClient>,
     _states: SlackClientEventsUserState,
 ) -> Result<SlackCommandEventResponse, Box<dyn std::error::Error + Send + Sync>> {
-    println!("{:#?}", event);
-
     let token_value: SlackApiTokenValue = env::var("SLACK_TOKEN").unwrap().into();
     let token: SlackApiToken = SlackApiToken::new(token_value);
     tokio::spawn(notify_unmatched_pages(
@@ -115,16 +82,13 @@ async fn notify_unmatched_pages(
         gradescope, course, ..
     } = init_from_env().await?;
 
-    let assignments = gradescope
-        .get_assignments(&course)
-        .await
-        .context("could not get assignments")?;
-    trace!(?assignments, "got assignments");
+    let assignments = gradescope.get_assignments(&course).await?;
+    info!(?assignments, "got assignments");
 
     let assignment = assignment_selector
         .select_from(&assignments)
         .context("could not get assignment")?;
-    debug!(?assignment, "got target assignment");
+    info!(?assignment, "got target assignment");
 
     let course_client = CourseClient::new(&gradescope, &course);
 
