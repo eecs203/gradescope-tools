@@ -1,6 +1,6 @@
 use std::fmt;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Deserialize;
 use serde_with::serde_conv;
 
@@ -39,17 +39,6 @@ impl Course {
 
     pub fn user_role(&self) -> Role {
         self.user_role
-    }
-
-    pub fn find_by_short_name(
-        name: &str,
-        courses: impl IntoIterator<Item = Self>,
-    ) -> Result<Course> {
-        let pred = |course: &Course| course.short_name() == name;
-        courses
-            .into_iter()
-            .find(pred)
-            .with_context(|| format!("could not find course with short name \"{name}\""))
     }
 }
 

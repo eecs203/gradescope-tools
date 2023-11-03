@@ -1,3 +1,4 @@
+use anyhow::{Context, Result};
 use scraper::ElementRef;
 
 use crate::assignment::Assignment;
@@ -33,10 +34,12 @@ pub fn text(el: ElementRef) -> String {
     el.text().flat_map(|text| text.chars()).collect()
 }
 
-pub fn id_from_link(link: ElementRef) -> Option<String> {
+pub fn id_from_link(link: ElementRef) -> Result<String> {
     link.value()
-        .attr("href")?
+        .attr("href")
+        .context("could not get id from link: no href attribute found")?
         .split('/')
         .last()
+        .context("could not get id from link: href did not have a last component")
         .map(ToOwned::to_owned)
 }

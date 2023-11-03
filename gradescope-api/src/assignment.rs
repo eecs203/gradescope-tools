@@ -3,17 +3,21 @@ use std::fmt;
 use anyhow::Result;
 use futures::AsyncRead;
 use serde::Deserialize;
-use serde_with::serde_conv;
+use serde_with::{serde_as, serde_conv};
 
 use crate::course::CourseClient;
 use crate::submission::SubmissionToStudentMap;
 use crate::submission_export::SubmissionExport;
 use crate::types::Points;
 
-#[derive(Debug, Clone)]
+#[serde_as]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Assignment {
+    #[serde_as(as = "AssignmentIdWithUnderscore")]
     id: AssignmentId,
+    #[serde(rename = "title")]
     name: AssignmentName,
+    #[serde(rename = "total_points")]
     points: Points,
 }
 
@@ -111,7 +115,19 @@ serde_conv! {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+serde_conv! {
+    pub(crate) AssignmentIdWithUnderscore,
+    AssignmentId,
+    |assignment_id: &AssignmentId| format!("assignment_{}", assignment_id.id),
+    |value: &str| -> Result<_, std::convert::Infallible> {
+        Ok(AssignmentId {
+            id: value.trim_start_matches("assignment_").to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(transparent)]
 pub struct AssignmentName {
     name: String,
 }
@@ -130,4 +146,10 @@ impl fmt::Display for AssignmentName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.name.fmt(f)
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AssignmentsTableProps {
+    #[serde(rename = "table_data")]
+    pub assignments: Vec<Assignment>,
 }

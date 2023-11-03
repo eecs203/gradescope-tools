@@ -9,9 +9,7 @@ use sqlx::SqlitePool;
 #[tokio::main]
 async fn main() -> Result<()> {
     let InitFromEnv {
-        course,
-        gradescope,
-        course_name: _,
+        course, gradescope, ..
     } = init_from_env().await?;
 
     let db_pool = SqlitePool::connect(&db_url_from_env()).await?;

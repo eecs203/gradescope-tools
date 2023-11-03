@@ -1,6 +1,6 @@
 use core::fmt;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
@@ -29,7 +29,7 @@ impl fmt::Display for SubmissionId {
     }
 }
 
-serde_conv!(
+serde_conv! {
     pub(crate) SubmissionIdAsInt,
     SubmissionId,
     |submission_id: &SubmissionId| submission_id.id.parse::<u64>().unwrap(),
@@ -38,7 +38,7 @@ serde_conv!(
             id: value.to_string(),
         })
     }
-);
+}
 
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
@@ -129,11 +129,11 @@ struct Submission {
 }
 
 #[derive(Debug, Clone)]
-pub struct SubmissionToStudentMap(Rc<HashMap<SubmissionId, Vec<StudentSubmitter>>>);
+pub struct SubmissionToStudentMap(Arc<HashMap<SubmissionId, Vec<StudentSubmitter>>>);
 
 impl SubmissionToStudentMap {
     pub fn new(map: HashMap<SubmissionId, Vec<StudentSubmitter>>) -> Self {
-        Self(Rc::new(map))
+        Self(Arc::new(map))
     }
 
     pub fn students<'a>(&'a self, submission_id: &SubmissionId) -> Option<&'a [StudentSubmitter]> {

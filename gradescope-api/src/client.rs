@@ -7,14 +7,14 @@ use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
 use reqwest::{Client as HttpClient, Method, RequestBuilder, Response};
-use scraper::{ElementRef, Html};
+use scraper::{CaseSensitivity, Element, ElementRef, Html};
 use serde::Deserialize;
 use tokio::sync::MutexGuard;
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::assignment::{Assignment, AssignmentId, AssignmentName};
+use crate::assignment::{Assignment, AssignmentsTableProps};
 use crate::course::{Course, CourseId, Role};
 use crate::creds::Creds;
 use crate::export_submissions::{download_submission_export, files_as_submissions, read_zip};
@@ -23,7 +23,7 @@ use crate::regrade::Regrade;
 use crate::submission::{SubmissionId, SubmissionsManagerProps};
 use crate::submission_export::pdf::SubmissionPdf;
 use crate::submission_export::{submissions_export_from_response, SubmissionExport};
-use crate::types::{GraderName, Points, QuestionTitle, StudentName};
+use crate::types::{GraderName, QuestionTitle, StudentName};
 use crate::util::*;
 
 macro_rules! selectors {
@@ -51,6 +51,7 @@ selectors! {
     REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr",
     BULK_EXPORT_A = ".js-bulkExportModalDownload",
     SUBMISSIONS_MANAGER = "#main-content > [data-react-class=SubmissionsManager]",
+    ASSIGNMENTS_TABLE = "[data-react-class=AssignmentsTable]",
     CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
@@ -175,30 +176,42 @@ impl Client<Init> {
 }
 
 impl Client<Auth> {
-    pub async fn get_courses(&self) -> Result<(Vec<Course>, Vec<Course>)> {
+    pub async fn get_courses(&self) -> Result<Vec<Course>> {
         let account_page = self.get_gs_html(ACCOUNT_PATH).await?;
         let course_list_headings = account_page
             .select(&COURSE_LIST_HEADING)
             .filter_map(|el| {
-                el.next_sibling()
-                    .and_then(ElementRef::wrap)
+                el.next_siblings()
+                    .filter_map(ElementRef::wrap)
+                    .find(|sib| {
+                        sib.has_class(&("courseList".into()), CaseSensitivity::CaseSensitive)
+                    })
                     .map(|list| (text(el), list))
             })
             .collect::<HashMap<_, _>>();
 
-        let instructor_course_list = course_list_headings.get("Instructor Courses");
-        let student_course_list = course_list_headings.get("Student Courses");
+        let heading_account_types = [
+            // Accounts that are students in some class(es) and instructors in some class(es) have
+            // headings to differentiate classes by role
+            ("Instructor Courses", Role::Instructor),
+            ("Student Courses", Role::Student),
+            // Accounts with only one role don't need to differentiate. We assume users are
+            // instructors, so the role should be instructor.
+            // TODO: properly handle student users?
+            ("Your Courses", Role::Instructor),
+        ];
 
-        let instructor_courses = instructor_course_list
-            .into_iter()
-            .flat_map(|list| Self::parse_courses(*list, Role::Instructor))
-            .collect();
-        let student_courses = student_course_list
-            .into_iter()
-            .flat_map(|list| Self::parse_courses(*list, Role::Student))
+        let courses = heading_account_types
+            .iter()
+            .flat_map(|(heading, role)| {
+                course_list_headings
+                    .get(*heading)
+                    .into_iter()
+                    .flat_map(|list| Self::parse_courses(*list, *role))
+            })
             .collect();
 
-        Ok((instructor_courses, student_courses))
+        Ok(courses)
     }
 
     fn parse_courses(list: ElementRef, user_role: Role) -> impl Iterator<Item = Course> + '_ {
@@ -207,38 +220,36 @@ impl Client<Auth> {
     }
 
     fn parse_course(course_box: ElementRef, user_role: Role) -> Option<Course> {
-        let id = CourseId::new(id_from_link(course_box)?);
+        let id = CourseId::new(id_from_link(course_box).ok()?);
         let short_name = text(course_box.select(&COURSE_SHORT_NAME).next()?);
         let name = text(course_box.select(&COURSE_NAME).next()?);
         Some(Course::new(id, short_name, name, user_role))
     }
 
+    #[tracing::instrument(skip(self), ret, err)]
     pub async fn get_assignments(&self, course: &Course) -> Result<Vec<Assignment>> {
         let assignments_page = self
             .get_gs_html(&gs_course_path(course, ASSIGNMENTS_COURSE_PATH))
             .await?;
 
-        let assignments = assignments_page
-            .select(&ASSIGNMENT_ROW)
-            .filter_map(Self::parse_assignment)
-            .collect();
+        let assignments_table = assignments_page
+            .select(&ASSIGNMENTS_TABLE)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!(
+                    "not exactly one assignments table: found {}",
+                    err_it.count()
+                )
+            })?;
+        let assignments_table_data = assignments_table
+            .value()
+            .attr("data-react-props")
+            .context("missing assignments table data")?;
 
-        Ok(assignments)
-    }
+        let assignments_table_props: AssignmentsTableProps =
+            serde_json::from_str(assignments_table_data)?;
 
-    // TODO: report failure
-    fn parse_assignment(row: ElementRef) -> Option<Assignment> {
-        let mut entries = row.select(&TD);
-
-        let name_entry = entries.next()?;
-        let id = AssignmentId::new(id_from_link(name_entry.select(&A).next()?)?);
-        let name = AssignmentName::new(text(name_entry));
-
-        let points_entry = entries.next()?;
-        let points_value = text(points_entry).parse().ok()?;
-        let points = Points::new(points_value).ok()?;
-
-        Some(Assignment::new(id, name, points))
+        Ok(assignments_table_props.assignments)
     }
 
     pub async fn get_regrades(
