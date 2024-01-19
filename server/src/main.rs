@@ -8,6 +8,8 @@ use futures::future::try_join;
 use futures::{future, StreamExt, TryStreamExt};
 use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::course::CourseClient;
+use gradescope_api::submission_export::pdf::SubmissionPdfStream;
+use gradescope_api::submission_export::SubmissionExport;
 use log::{init_tracing, SlackLayer};
 use notify_unmatched_pages::report::UnmatchedReport;
 use slack_morphism::prelude::*;

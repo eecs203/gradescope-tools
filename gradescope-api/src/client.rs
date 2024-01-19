@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::{AsyncRead, Stream};
+use futures::Stream;
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
@@ -361,7 +361,7 @@ impl Client<Auth> {
         &self,
         course: &Course,
         assignment: &Assignment,
-    ) -> Result<SubmissionExport<impl AsyncRead + Unpin>> {
+    ) -> Result<impl SubmissionExport> {
         let path = self.exported_submissions_path(course, assignment).await?;
         let request = self
             .gs(Method::GET, &path)

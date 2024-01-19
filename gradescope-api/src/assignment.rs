@@ -1,7 +1,6 @@
 use std::fmt;
 
 use anyhow::Result;
-use futures::AsyncRead;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, serde_conv};
 
@@ -60,9 +59,7 @@ impl<'a> AssignmentClient<'a> {
         self.assignment
     }
 
-    pub async fn download_submission_export(
-        &self,
-    ) -> Result<SubmissionExport<impl AsyncRead + Unpin>> {
+    pub async fn download_submission_export(&self) -> Result<impl SubmissionExport> {
         let gradescope = self.course_client.gradescope();
         let course = self.course_client.course();
 
