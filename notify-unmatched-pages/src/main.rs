@@ -3,14 +3,16 @@ use app_utils::{init_from_env, init_tracing, InitFromEnv};
 use futures::future::try_join;
 use futures::{future, stream, StreamExt, TryStreamExt};
 use gradescope_api::assignment::{Assignment, AssignmentId, AssignmentName};
+use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::course::CourseClient;
 use gradescope_api::submission::SubmissionsManagerProps;
 use gradescope_api::submission_export::submissions_export_load;
 use gradescope_api::types::Points;
+use itertools::Itertools;
 use notify_unmatched_pages::notify::find_unsubmitted;
 use notify_unmatched_pages::report::UnmatchedReport;
 use tokio::fs;
-use tracing::{debug, error};
+use tracing::{debug, error, trace};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,78 +23,42 @@ async fn main() -> Result<()> {
     } = init_from_env().await?;
     debug!("initialized");
 
+    let assignment_selectors = ["Assignment 0"];
+    let assignment_selectors =
+        assignment_selectors.map(|selector| AssignmentSelector::new(selector.to_owned()));
+
     let assignments = gradescope
         .get_assignments(&course)
         .await
-        .context("could not get assignments")?;
-    dbg!(&assignments);
-    // trace!(?assignments, "got assignments");
-    // let (hw, gw) = assignments
-    //     .iter()
-    //     .inspect(|x| println!("before: {x:?}"))
-    //     .filter(|assignment| {
-    //         assignment.name().as_str() == "Homework 1"
-    //             || assignment.name().as_str() == "Groupwork 1"
-    //     })
-    //     .inspect(|x| println!("{x:?}"))
-    //     .collect_tuple()
-    //     .context("could not find assignment")?;
-    let targets = [
-        Assignment::new(
-            AssignmentId::new("3739823".to_owned()),
-            AssignmentName::new("Homework 11".to_owned()),
-            Points::new(100.0).unwrap(),
-        ),
-        Assignment::new(
-            AssignmentId::new("3739838".to_owned()),
-            AssignmentName::new("Groupwork 11".to_owned()),
-            Points::new(30.0).unwrap(),
-        ),
-    ];
+        .context("could not get assignments from Gradescope")?;
+    trace!(?assignments, "got assignments");
+
+    let targets = assignment_selectors
+        .iter()
+        .map(|selector| selector.select_from(&assignments));
 
     let course_client = CourseClient::new(&gradescope, &course);
 
     let assignment_clients = targets
         .iter()
-        .map(|assignment| course_client.with_assignment(assignment));
+        .map(|assignment| course_client.with_assignment(assignment))
+        .collect_vec();
 
-    // let exports: Vec<_> = stream::iter(assignment_clients)
-    //     .map(|client| async move {
-    //         anyhow::Ok((
-    //             client.assignment(),
-    //             try_join(
-    //                 client.download_submission_export(),
-    //                 client.submission_to_student_map(),
-    //             )
-    //             .await?,
-    //         ))
-    //     })
-    //     .buffer_unordered(8);
-
-    let exports = stream::iter(assignment_clients.zip(vec!["out/hw11.zip", "out/gw11.zip"]))
+    let reports = stream::iter(&assignment_clients)
+        .zip(stream::iter(["out/hw11.zip", "out/gw11.zip"]))
         .map(|(client, path)| async move {
-            anyhow::Ok((
-                client.assignment(),
-                try_join(
-                    submissions_export_load(path),
-                    client.submission_to_student_map(),
-                )
-                .await?,
+            let (submissions_export, submission_to_student_map) = try_join(
+                submissions_export_load(path),
+                client.submission_to_student_map(),
+            )
+            .await?;
+            anyhow::Ok(find_unsubmitted(
+                client,
+                submissions_export,
+                submission_to_student_map,
             ))
         })
-        .buffer_unordered(8);
-
-    let reports = exports
-        .map_ok(
-            |(assignment, (submission_export, submission_to_student_map))| {
-                find_unsubmitted(
-                    &course,
-                    assignment,
-                    submission_export,
-                    submission_to_student_map,
-                )
-            },
-        )
+        .buffer_unordered(assignment_clients.len().min(2))
         .try_flatten()
         .collect::<Vec<_>>()
         .await;
