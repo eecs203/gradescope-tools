@@ -330,18 +330,8 @@ impl SubmissionPdf {
     }
 }
 
-#[pin_project]
-pub struct SubmissionPdfStream<S: Stream<Item = Result<SubmissionPdf>>> {
-    #[pin]
-    stream: S,
-}
-
-impl<S: Stream<Item = Result<SubmissionPdf>>> SubmissionPdfStream<S> {
-    pub fn new(stream: S) -> Self {
-        Self { stream }
-    }
-
-    pub fn unmatched(
+pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {
+    fn unmatched(
         self,
     ) -> UnmatchedSubmissionStream<impl Stream<Item = Result<UnmatchedSubmission>>> {
         UnmatchedSubmissionStream::new(
@@ -352,17 +342,7 @@ impl<S: Stream<Item = Result<SubmissionPdf>>> SubmissionPdfStream<S> {
     }
 }
 
-impl<S: Stream<Item = Result<SubmissionPdf>>> Stream for SubmissionPdfStream<S> {
-    type Item = S::Item;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        self.project().stream.poll_next(cx)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
-    }
-}
+impl<S: Stream<Item = Result<SubmissionPdf>>> SubmissionPdfStream for S {}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum MatchingState {

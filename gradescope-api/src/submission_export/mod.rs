@@ -24,19 +24,17 @@ impl<R: AsyncRead + Unpin + Send + 'static> SubmissionExport<R> {
         Self { read }
     }
 
-    pub fn submissions(self) -> SubmissionPdfStream<impl Stream<Item = Result<SubmissionPdf>>> {
-        SubmissionPdfStream::new(
-            self.submission_pdf_bufs()
-                .map(|result| {
-                    tokio_rayon::spawn(move || {
-                        let (filename, buf) = result?;
-                        Self::pdf_to_submission_pdf(filename, buf)
-                    })
+    pub fn submissions(self) -> impl SubmissionPdfStream {
+        self.submission_pdf_bufs()
+            .map(|result| {
+                tokio_rayon::spawn(move || {
+                    let (filename, buf) = result?;
+                    Self::pdf_to_submission_pdf(filename, buf)
                 })
-                .map(|x| x)
-                .buffer_unordered(16)
-                .map(|x| x),
-        )
+            })
+            .map(|x| x)
+            .buffer_unordered(16)
+            .map(|x| x)
     }
 
     fn submission_pdf_bufs(self) -> impl Stream<Item = Result<(String, Vec<u8>)>> {

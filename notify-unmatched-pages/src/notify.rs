@@ -2,6 +2,7 @@ use anyhow::Result;
 use futures::{future, AsyncRead, Stream, StreamExt, TryStreamExt};
 use gradescope_api::assignment::AssignmentClient;
 use gradescope_api::submission::SubmissionToStudentMap;
+use gradescope_api::submission_export::pdf::SubmissionPdfStream;
 use gradescope_api::submission_export::SubmissionExport;
 use tracing::error;
 
