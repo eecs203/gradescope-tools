@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use app_utils::{init_from_env, InitFromEnv};
 use gradescope_api::assignment::Assignment;
 use slack_morphism::prelude::*;
+use tracing::info;
 
 #[tracing::instrument(skip(client, token), ret, err)]
 async fn notify_unmatched_pages(

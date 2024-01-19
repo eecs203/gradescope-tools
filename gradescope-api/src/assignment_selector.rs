@@ -1,3 +1,5 @@
+use anyhow::{Context, Result};
+
 use crate::assignment::Assignment;
 
 #[derive(Debug, Clone)]
@@ -10,9 +12,10 @@ impl AssignmentSelector {
         Self { selector }
     }
 
-    pub fn select_from<'a>(&self, assignments: &'a [Assignment]) -> Option<&'a Assignment> {
+    pub fn select_from<'a>(&self, assignments: &'a [Assignment]) -> Result<&'a Assignment> {
         self.select_as_id(assignments)
             .or_else(|| self.select_as_name(assignments))
+            .with_context(|| format!("could not find assignment by selector `{}`", self.selector))
     }
 
     fn select_as_id<'a>(&self, assignments: &'a [Assignment]) -> Option<&'a Assignment> {
