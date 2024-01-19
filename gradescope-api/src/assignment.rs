@@ -2,16 +2,16 @@ use std::fmt;
 
 use anyhow::Result;
 use futures::AsyncRead;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, serde_conv};
 
-use crate::course::CourseClient;
+use crate::course::{Course, CourseClient};
 use crate::submission::SubmissionToStudentMap;
 use crate::submission_export::SubmissionExport;
 use crate::types::Points;
 
 #[serde_as]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Assignment {
     #[serde_as(as = "AssignmentIdWithUnderscore")]
     id: AssignmentId,
@@ -52,6 +52,10 @@ impl<'a> AssignmentClient<'a> {
         }
     }
 
+    pub fn course(&self) -> &'a Course {
+        self.course_client.course()
+    }
+
     pub fn assignment(&self) -> &'a Assignment {
         self.assignment
     }
@@ -82,7 +86,7 @@ impl<'a> AssignmentClient<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AssignmentId {
     id: String,
@@ -126,7 +130,7 @@ serde_conv! {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AssignmentName {
     name: String,

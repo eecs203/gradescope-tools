@@ -154,7 +154,7 @@ impl fmt::Display for Email {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Points {
     #[serde_as(as = "DisplayFromStr")]

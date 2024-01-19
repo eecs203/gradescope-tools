@@ -13,9 +13,10 @@ use notify_unmatched_pages::report::UnmatchedReport;
 use slack_morphism::prelude::*;
 use tracing::{error, info};
 
+use crate::notify_unmatched::ChooseAssignmentsTemplate;
+
 mod log;
-mod page_match_task;
-mod task;
+mod notify_unmatched;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -85,6 +86,11 @@ async fn notify_unmatched_pages(
     let assignments = gradescope.get_assignments(&course).await?;
     info!(?assignments, "got assignments");
 
+    let session = client.open_session(&token);
+    let message = ChooseAssignmentsTemplate::new(&assignments);
+    let request = SlackApiChatPostMessageRequest::new(channel.clone(), message.render_template());
+    session.chat_post_message(&request).await?;
+
     let assignment = assignment_selector
         .select_from(&assignments)
         .context("could not get assignment")?;
@@ -108,8 +114,6 @@ async fn notify_unmatched_pages(
     let reports = nonmatching_submitters.map_ok(|nonmatching_submitter| {
         UnmatchedReport::new(&course, assignment, nonmatching_submitter)
     });
-
-    let session = client.open_session(&token);
 
     let slack_errors = reports.then(|result| async {
         match result {
