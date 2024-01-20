@@ -1,18 +1,19 @@
 use std::ops::RangeFrom;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context as AnyhowContext, Result};
+use anyhow::{anyhow, Context as AnyhowContext, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use nom::branch::alt;
-use nom::bytes::complete::{tag, take_till, take_until};
+use nom::bytes::complete::tag;
 use nom::character::complete::{anychar, char, digit1, space0};
-use nom::combinator::{eof, map, map_res, opt};
+use nom::combinator::{eof, map_res, opt};
 use nom::error::ParseError;
-use nom::multi::{many0, many1, many_till, separated_list0, separated_list1};
+use nom::multi::{many0, many_till, separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
-use nom::{AsChar, Finish, IResult, InputIter, InputLength, Parser, Slice};
+use nom::{AsChar, IResult, InputIter, InputLength, Parser, Slice};
 
 use crate::submission::SubmissionId;
 use crate::types::QuestionNumber;
@@ -70,7 +71,7 @@ impl SubmissionPdf {
 
         Ok(all_questions
             .iter()
-            .filter(move |num| matched.contains(num))
+            .filter(move |num| matched.binary_search(num).is_err())
             .cloned()
             .map(UnmatchedQuestion::new))
     }
@@ -138,15 +139,14 @@ where
 }
 
 pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {
-    fn unmatched(
-        self,
-        all_questions: &[QuestionNumber],
-    ) -> UnmatchedSubmissionStream<impl Stream<Item = Result<UnmatchedSubmission>>> {
-        UnmatchedSubmissionStream::new(
-            self.map(|result| tokio_rayon::spawn(move || result?.as_unmatched(all_questions)))
-                .buffer_unordered(16)
-                .try_filter_map(|option_unmatched| async move { Ok(option_unmatched) }),
-        )
+    fn unmatched(self, all_questions: Vec<QuestionNumber>) -> impl UnmatchedSubmissionStream {
+        let all_questions = Arc::new(all_questions);
+        self.map(move |result| {
+            let all_questions = Arc::clone(&all_questions);
+            tokio_rayon::spawn(move || result?.as_unmatched(&Arc::clone(&all_questions)))
+        })
+        .buffer_unordered(16)
+        .try_filter_map(|option_unmatched| async move { Ok(option_unmatched) })
     }
 }
 

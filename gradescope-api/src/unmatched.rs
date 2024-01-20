@@ -1,11 +1,8 @@
 use std::iter;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 use anyhow::{Context as AnyhowContext, Result};
 use futures::{stream, Stream, TryStreamExt};
 use itertools::Either;
-use pin_project::pin_project;
 
 use crate::submission::{StudentSubmitter, SubmissionId, SubmissionToStudentMap};
 use crate::types::QuestionNumber;
@@ -69,45 +66,24 @@ impl UnmatchedSubmission {
     }
 }
 
-#[pin_project]
-pub struct UnmatchedSubmissionStream<S: Stream<Item = Result<UnmatchedSubmission>>> {
-    #[pin]
-    stream: S,
-}
-
 fn id<A, B>(f: impl Fn(A) -> B) -> impl Fn(A) -> B {
     f
 }
 
-impl<'a, S: Stream<Item = Result<UnmatchedSubmission>> + 'a> UnmatchedSubmissionStream<S> {
-    pub fn new(stream: S) -> Self {
-        Self { stream }
-    }
-
-    pub fn submitters(
+pub trait UnmatchedSubmissionStream: Stream<Item = Result<UnmatchedSubmission>> + Sized {
+    fn submitters(
         self,
         submission_to_student_map: SubmissionToStudentMap,
     ) -> impl Stream<Item = Result<NonmatchingSubmitter>> {
-        self.stream
-            .map_ok(id(move |unmatched_submission: UnmatchedSubmission| {
-                unmatched_submission.submitters(submission_to_student_map.clone())
-            }))
-            .map_ok(stream::iter)
-            .try_flatten()
+        self.map_ok(id(move |unmatched_submission: UnmatchedSubmission| {
+            unmatched_submission.submitters(submission_to_student_map.clone())
+        }))
+        .map_ok(stream::iter)
+        .try_flatten()
     }
 }
 
-impl<S: Stream<Item = Result<UnmatchedSubmission>>> Stream for UnmatchedSubmissionStream<S> {
-    type Item = S::Item;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        self.project().stream.poll_next(cx)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.stream.size_hint()
-    }
-}
+impl<S: Stream<Item = Result<UnmatchedSubmission>>> UnmatchedSubmissionStream for S {}
 
 #[derive(Debug, Clone)]
 pub struct NonmatchingSubmitter {
