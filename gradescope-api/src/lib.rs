@@ -5,6 +5,7 @@ pub mod course;
 pub mod course_selector;
 pub mod creds;
 pub mod export_submissions;
+pub mod question;
 pub mod rate_limit;
 pub mod regrade;
 pub mod submission;

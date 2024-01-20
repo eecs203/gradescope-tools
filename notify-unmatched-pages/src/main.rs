@@ -2,7 +2,7 @@ use std::pin::pin;
 
 use anyhow::{Context, Result};
 use app_utils::{init_from_env, init_tracing, InitFromEnv};
-use futures::future::try_join;
+use futures::future::{try_join, try_join3};
 use futures::{future, pin_mut, stream, StreamExt, TryStreamExt};
 use gradescope_api::assignment::{Assignment, AssignmentId, AssignmentName};
 use gradescope_api::assignment_selector::AssignmentSelector;
@@ -39,15 +39,17 @@ async fn main() -> Result<()> {
 
     let assignment_client = course_client.with_assignment(assignment);
 
-    let (submissions_export, submission_to_student_map) = try_join(
+    let (submissions_export, submission_to_student_map, outline) = try_join3(
         submissions_export_load(path),
         assignment_client.submission_to_student_map(),
+        assignment_client.outline(),
     )
     .await?;
     let reports = find_unsubmitted(
         &assignment_client,
         submissions_export,
         submission_to_student_map,
+        outline,
     );
     pin_mut!(reports);
 

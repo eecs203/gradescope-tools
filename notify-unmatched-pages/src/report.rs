@@ -1,10 +1,11 @@
 use core::fmt;
 
 use anyhow::{Context, Result};
-use gradescope_api::assignment::{Assignment, AssignmentId, AssignmentName};
+use gradescope_api::assignment::{Assignment, AssignmentClient, AssignmentId, AssignmentName};
 use gradescope_api::course::{Course, CourseId};
+use gradescope_api::question::QuestionNumber;
 use gradescope_api::submission::{StudentSubmitter, SubmissionId};
-use gradescope_api::types::{Email, QuestionNumber, StudentName};
+use gradescope_api::types::{Email, StudentName};
 use gradescope_api::unmatched::{NonmatchingSubmitter, UnmatchedQuestion};
 use itertools::Itertools;
 use lettre::message::header::ContentType;
@@ -53,17 +54,17 @@ impl fmt::Display for UnmatchedStudent {
 
 #[derive(Debug, Clone)]
 pub struct UnmatchedQuestions {
-    questions: Vec<QuestionNumber>,
+    questions: Vec<UnmatchedQuestion>,
 }
 
 impl UnmatchedQuestions {
-    pub fn new(questions: impl Iterator<Item = QuestionNumber>) -> Self {
+    pub fn new(questions: impl Iterator<Item = UnmatchedQuestion>) -> Self {
         Self {
             questions: questions.collect(),
         }
     }
 
-    pub fn questions(&self) -> &[QuestionNumber] {
+    pub fn questions(&self) -> &[UnmatchedQuestion] {
         &self.questions
     }
 }
@@ -98,27 +99,17 @@ pub struct UnmatchedReport<'a> {
 }
 
 impl<'a> UnmatchedReport<'a> {
-    pub fn new(
-        course: &'a Course,
-        assignment: &'a Assignment,
-        nonmatching_submitter: NonmatchingSubmitter,
-    ) -> Self {
+    pub fn new(client: &'a AssignmentClient, nonmatching_submitter: NonmatchingSubmitter) -> Self {
         let student = UnmatchedStudent::new(nonmatching_submitter.student());
         let submission = nonmatching_submitter.submission();
         let submission_id = submission.id().clone();
-        let unmatched = UnmatchedQuestions::new(
-            submission
-                .questions()
-                .iter()
-                .map(UnmatchedQuestion::question)
-                .cloned(),
-        );
+        let unmatched = UnmatchedQuestions::new(submission.questions().iter().cloned());
 
         Self {
-            course_id: course.id(),
-            assignment_id: assignment.id(),
+            course_id: client.course().id(),
+            assignment_id: client.assignment().id(),
             submission_id,
-            assignment_name: assignment.name(),
+            assignment_name: client.assignment().name(),
             student,
             unmatched,
         }

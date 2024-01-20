@@ -1,25 +1,28 @@
+use core::fmt;
 use std::iter;
 
 use anyhow::{Context as AnyhowContext, Result};
 use futures::{stream, Stream, TryStreamExt};
 use itertools::Either;
 
+use crate::question::Question;
 use crate::submission::{StudentSubmitter, SubmissionId, SubmissionToStudentMap};
-use crate::types::QuestionNumber;
 
 /// An `UnmatchedQuestion` is a question in a submission without any pages matched to it.
 #[derive(Debug, Clone)]
 pub struct UnmatchedQuestion {
-    question: QuestionNumber,
+    question: Question,
+}
+
+impl fmt::Display for UnmatchedQuestion {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.question.fmt(f)
+    }
 }
 
 impl UnmatchedQuestion {
-    pub fn new(question: QuestionNumber) -> Self {
+    pub fn new(question: Question) -> Self {
         Self { question }
-    }
-
-    pub fn question(&self) -> &QuestionNumber {
-        &self.question
     }
 }
 
@@ -46,6 +49,9 @@ impl UnmatchedSubmission {
         &self.unmatched_questions
     }
 
+    // Clippy thinks `.to_vec().into_iter()` can be replaced by `.cloned()`, but this does not
+    // take ownership of the underlying container referenced by the iterator.
+    #[allow(clippy::unnecessary_to_owned)]
     pub fn submitters(
         self,
         submission_to_student_map: SubmissionToStudentMap,
@@ -87,8 +93,8 @@ impl<S: Stream<Item = Result<UnmatchedSubmission>>> UnmatchedSubmissionStream fo
 
 #[derive(Debug, Clone)]
 pub struct NonmatchingSubmitter {
-    student: StudentSubmitter,
-    submission: UnmatchedSubmission,
+    pub student: StudentSubmitter,
+    pub submission: UnmatchedSubmission,
 }
 
 impl NonmatchingSubmitter {

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, serde_conv};
 
 use crate::course::{Course, CourseClient};
+use crate::question::Outline;
 use crate::submission::SubmissionToStudentMap;
 use crate::submission_export::SubmissionExport;
 use crate::types::Points;
@@ -68,6 +69,15 @@ impl<'a> AssignmentClient<'a> {
             .await?;
 
         Ok(export)
+    }
+
+    pub async fn outline(&self) -> Result<Outline> {
+        let gradescope = self.course_client.gradescope();
+        let course = self.course_client.course();
+
+        let outline = gradescope.get_outline(course, self.assignment).await?;
+
+        Ok(outline)
     }
 
     pub async fn submission_to_student_map(&self) -> Result<SubmissionToStudentMap> {

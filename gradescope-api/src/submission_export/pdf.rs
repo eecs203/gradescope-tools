@@ -15,8 +15,8 @@ use nom::multi::{many0, many_till, separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::{AsChar, IResult, InputIter, InputLength, Parser, Slice};
 
+use crate::question::{Question, QuestionNumber};
 use crate::submission::SubmissionId;
-use crate::types::QuestionNumber;
 use crate::unmatched::{UnmatchedQuestion, UnmatchedSubmission, UnmatchedSubmissionStream};
 
 pub struct SubmissionPdf {
@@ -43,10 +43,7 @@ impl SubmissionPdf {
         })
     }
 
-    pub fn as_unmatched(
-        &self,
-        all_questions: &[QuestionNumber],
-    ) -> Result<Option<UnmatchedSubmission>> {
+    pub fn as_unmatched(&self, all_questions: &[Question]) -> Result<Option<UnmatchedSubmission>> {
         let unmatched_questions = self.unmatched_questions(all_questions)?.collect_vec();
         if !unmatched_questions.is_empty() {
             let id = self.id().clone();
@@ -62,7 +59,7 @@ impl SubmissionPdf {
 
     pub fn unmatched_questions<'a>(
         &self,
-        all_questions: &'a [QuestionNumber],
+        all_questions: &'a [Question],
     ) -> Result<impl Iterator<Item = UnmatchedQuestion> + 'a> {
         let mut matched = self.matched_question_numbers()?;
         // Allow for binary search later
@@ -71,7 +68,7 @@ impl SubmissionPdf {
 
         Ok(all_questions
             .iter()
-            .filter(move |num| matched.binary_search(num).is_err())
+            .filter(move |question| matched.binary_search(question.number()).is_err())
             .cloned()
             .map(UnmatchedQuestion::new))
     }
@@ -114,7 +111,10 @@ fn skip_thru_page_label(text: &str) -> IResult<&str, ()> {
 }
 
 fn question_num_list(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
-    let list_sep = tuple((space0, char(','), space0, opt(tuple((tag("and"), space0)))));
+    let comma = tuple((space0, char(','), space0)).map(|_| ());
+    let comma_and = tuple((space0, char(','), space0, tag("and"), space0)).map(|_| ());
+    let and = tuple((space0, tag("and"), space0)).map(|_| ());
+    let list_sep = alt((comma_and, comma, and));
     separated_list0(list_sep, question_num)(text)
 }
 
@@ -139,7 +139,7 @@ where
 }
 
 pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {
-    fn unmatched(self, all_questions: Vec<QuestionNumber>) -> impl UnmatchedSubmissionStream {
+    fn unmatched(self, all_questions: Vec<Question>) -> impl UnmatchedSubmissionStream {
         let all_questions = Arc::new(all_questions);
         self.map(move |result| {
             let all_questions = Arc::clone(&all_questions);

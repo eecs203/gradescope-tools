@@ -2,77 +2,11 @@
 //! place them before further building out the Gradescope data model.
 
 use std::fmt;
-use std::num::{FpCategory, NonZeroU8};
-use std::str::FromStr;
+use std::num::FpCategory;
 
 use anyhow::{bail, Result};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, serde_conv, DisplayFromStr};
-
-// Not just an integer because of question parts. For example, part 2 of question 3 is "3.2".
-// TODO: parse as a sequence of integers
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct QuestionNumber {
-    numbers: Vec<NonZeroU8>,
-}
-
-impl QuestionNumber {
-    /// Assuming this question number is for a leaf (i.e. it has no parts, subparts, ...),
-    /// determines if this is the first question. If it is not a leaf, determines if this is the
-    /// first question at its level.
-    pub fn is_first(&self) -> bool {
-        self.numbers.iter().all(|number| *number == NonZeroU8::MIN)
-    }
-}
-
-impl FromStr for QuestionNumber {
-    type Err = std::num::ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        // Question numbers are of the form `n_0.n_1.n_2.…`, where `n_0` is the top-level question
-        // number, `n_1` is the question part, `n_2` is the subpart...
-        s.split('.')
-            .map(NonZeroU8::from_str)
-            .try_collect()
-            .map(|numbers| Self { numbers })
-    }
-}
-
-impl fmt::Debug for QuestionNumber {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_tuple("QuestionNumber")
-            .field(&format_args!("{}", self))
-            .finish()
-    }
-}
-
-impl fmt::Display for QuestionNumber {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.numbers.iter().format("."))
-    }
-}
-
-#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct QuestionTitle {
-    title: String,
-}
-
-impl QuestionTitle {
-    pub fn new(title: String) -> Self {
-        Self { title }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.title
-    }
-}
-
-impl fmt::Display for QuestionTitle {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.title.fmt(f)
-    }
-}
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]

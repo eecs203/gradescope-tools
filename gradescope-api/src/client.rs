@@ -18,12 +18,13 @@ use crate::assignment::{Assignment, AssignmentsTableProps};
 use crate::course::{Course, CourseId, Role};
 use crate::creds::Creds;
 use crate::export_submissions::{download_submission_export, files_as_submissions, read_zip};
+use crate::question::{AssignmentOutline, Outline, QuestionTitle};
 use crate::rate_limit::RateLimited;
 use crate::regrade::Regrade;
 use crate::submission::{SubmissionId, SubmissionsManagerProps};
 use crate::submission_export::pdf::SubmissionPdf;
 use crate::submission_export::{submissions_export_from_response, SubmissionExport};
-use crate::types::{GraderName, QuestionTitle, StudentName};
+use crate::types::{GraderName, StudentName};
 use crate::util::*;
 
 macro_rules! selectors {
@@ -52,6 +53,7 @@ selectors! {
     BULK_EXPORT_A = ".js-bulkExportModalDownload",
     SUBMISSIONS_MANAGER = "#main-content > [data-react-class=SubmissionsManager]",
     ASSIGNMENTS_TABLE = "[data-react-class=AssignmentsTable]",
+    ASSIGNMENT_OUTLINE = "[data-react-class=AssignmentOutline]",
     CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
@@ -315,6 +317,34 @@ impl Client<Auth> {
             url,
             completed,
         ))
+    }
+
+    pub async fn get_outline(&self, course: &Course, assignment: &Assignment) -> Result<Outline> {
+        let outline_page = self
+            .get_gs_html(&gs_assignment_path(
+                course,
+                assignment,
+                OUTLINE_ASSIGNMENT_PATH,
+            ))
+            .await?;
+
+        let outline_elt = outline_page
+            .select(&ASSIGNMENT_OUTLINE)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!(
+                    "not exactly one assignment outline element: found {}",
+                    err_it.count()
+                )
+            })?;
+        let outline_data = outline_elt
+            .value()
+            .attr("data-react-props")
+            .context("missing assignment outline data")?;
+
+        let assignment_outline: AssignmentOutline = serde_json::from_str(outline_data)?;
+
+        Ok(assignment_outline.outline)
     }
 
     pub async fn get_submissions_metadata(

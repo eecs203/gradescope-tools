@@ -1,6 +1,7 @@
 use url::Url;
 
-use crate::types::{GraderName, QuestionNumber, QuestionTitle, StudentName};
+use crate::question::{QuestionNumber, QuestionTitle};
+use crate::types::{GraderName, StudentName};
 
 #[derive(Debug, Clone)]
 pub struct Regrade {

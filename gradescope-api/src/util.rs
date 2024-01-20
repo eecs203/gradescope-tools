@@ -9,6 +9,7 @@ pub const LOGIN_PATH: &str = "/login";
 pub const ACCOUNT_PATH: &str = "/account";
 pub const ASSIGNMENTS_COURSE_PATH: &str = "/assignments";
 pub const REGRADES_ASSIGNMENT_PATH: &str = "/regrade_requests";
+pub const OUTLINE_ASSIGNMENT_PATH: &str = "/outline/edit";
 
 pub fn gs_url(path: &str) -> String {
     format!("{BASE_URL}{path}")
