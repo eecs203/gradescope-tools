@@ -1,16 +1,12 @@
 use std::path::Path;
-use std::pin::{pin, Pin};
-use std::task::{Context, Poll};
 
-use anyhow::{anyhow, bail, Context as AnyhowContext, Result};
+use anyhow::{bail, Context as AnyhowContext, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use pdf::content::{Op, TextDrawAdjusted};
 use pdf::file::{CachedFile, FileOptions};
-use pdf::object::{Page, PageRc, Ref, Resolve, XObject};
+use pdf::object::{Page, PageRc};
 use pdf::PdfError;
-use pin_project::pin_project;
-use tracing::{debug, trace};
 
 use crate::submission::SubmissionId;
 use crate::types::QuestionNumber;
@@ -20,7 +16,6 @@ pub struct SubmissionPdf {
     submission_id: SubmissionId,
     file: CachedFile<Vec<u8>>,
     pages: Vec<PageRc>,
-    gradescope_logo_ref: Ref<XObject>,
 }
 
 impl SubmissionPdf {
@@ -35,19 +30,16 @@ impl SubmissionPdf {
 
         let file = FileOptions::cached().load(pdf_data)?;
         let pages = Self::pages(&file)?;
-        let gradescope_logo_ref = Self::gradescope_logo_ref(&file, &pages)?;
-        debug!(?gradescope_logo_ref, filename);
 
         Ok(Self {
             submission_id,
             file,
             pages,
-            gradescope_logo_ref,
         })
     }
 
     pub fn as_unmatched(&self) -> Result<Option<UnmatchedSubmission>> {
-        let unmatched_questions = self.unmatched_questions()?.collect_vec();
+        let unmatched_questions: Vec<_> = self.unmatched_questions().try_collect()?;
         if !unmatched_questions.is_empty() {
             let id = self.id().clone();
             Ok(Some(UnmatchedSubmission::new(id, unmatched_questions)))
@@ -60,43 +52,17 @@ impl SubmissionPdf {
         &self.submission_id
     }
 
-    pub fn unmatched_questions(&self) -> Result<impl Iterator<Item = UnmatchedQuestion>> {
-        let unmatched = self
-            .question_matching()?
-            .filter(|(state, _)| matches!(state, MatchingState::Unmatched))
-            .map(|(_, question)| UnmatchedQuestion::new(question));
-        Ok(unmatched)
+    pub fn unmatched_questions(&self) -> impl Iterator<Item = Result<UnmatchedQuestion>> + '_ {
+        self.matched_question_numbers()
+            .map_ok(UnmatchedQuestion::new)
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn question_matching(
-        &self,
-    ) -> Result<impl Iterator<Item = (MatchingState, QuestionNumber)>> {
-        let page_kinds = self.page_kinds()?;
-        trace!(?page_kinds);
-
-        let questions_by_matching = page_kinds
-            .into_iter()
-            .dedup()
-            .batching(|it| match it.next() {
-                Some(PageKind::StudentSubmission) => match it.next() {
-                    Some(PageKind::QuestionSummary(number)) => {
-                        // Submission(s), Summary => submission pages were matched to question
-                        Some((MatchingState::Matched, number))
-                    }
-                    None => None, // These pages aren't matched to a question; not a problem
-                    Some(PageKind::StudentSubmission) => {
-                        unreachable!("dedup should prevent submissions here")
-                    }
-                },
-                Some(PageKind::QuestionSummary(number)) => {
-                    // no submissions, Summary => no submission pages were matched to question
-                    Some((MatchingState::Unmatched, number))
-                }
-                None => None,
-            });
-
-        Ok(questions_by_matching)
+    pub fn matched_question_numbers(&self) -> impl Iterator<Item = Result<QuestionNumber>> + '_ {
+        self.pages
+            .iter()
+            .filter_map(|page| self.summary_page_questions(page).transpose())
+            .flatten_ok()
     }
 
     fn pages(file: &CachedFile<Vec<u8>>) -> Result<Vec<PageRc>> {
@@ -105,181 +71,41 @@ impl SubmissionPdf {
             .context("cannot get pages of PDF")
     }
 
-    fn gradescope_logo_ref(file: &CachedFile<Vec<u8>>, pages: &[PageRc]) -> Result<Ref<XObject>> {
-        // The assignment summary pages are collectively somewhat like a single page; the footer of
-        // only the last one contains a page number and the Gradescope logo. This should be the
-        // first appearance of the Gradescope logo in each PDF.
-        //
-        // It is not necessarily the first appearance of any image, however. In graded work, a
-        // grader's comments are indicated with a speech bubble image, which may thus appear in the
-        // assignment summary pages. However, the image is a small icon.
-        //
-        // I conjecture that any image appearing before the Gradescope logo will be a small icon, or
-        // at least not the same size as the logo itself. Thus, we can identify the logo by its
-        // size.
-        //
-        // After the assignment summary pages, it is possible (though unlikely) that a student's
-        // submission is the exact same size as the logo, so we do want the first image of the right
-        // size, not just any.
-
-        const LOGO_WIDTH: u32 = 1280;
-        const LOGO_HEIGHT: u32 = 193;
-
-        let logo_ref = pages
-            .iter()
-            .map(|page| page.resources())
-            .map_ok(|resource| resource.xobjects.iter())
-            .flatten_ok()
-            .map_ok(|(_, xobject_ref)| file.get(*xobject_ref))
-            .flatten_ok()
-            .filter_map_ok(|xobject| {
-                if let XObject::Image(image) = xobject.data().as_ref() {
-                    Some((xobject.get_ref(), image.width, image.height))
-                } else {
-                    None
-                }
-            })
-            .filter_ok(|(_, width, height)| *width == LOGO_WIDTH && *height == LOGO_HEIGHT)
-            .map_ok(|(xobject_ref, _, _)| xobject_ref)
-            .next()
-            .context("could not find Gradescope logo")?
-            .context("could not get Gradescope logo")?;
-
-        Ok(logo_ref)
-    }
-
-    fn page_kinds(&self) -> Result<Vec<PageKind>> {
-        let post_assignment_summary_pages = self.post_assignment_summary_pages()?;
-
-        let page_kinds = self
-            .post_assignment_summary_page_kinds(post_assignment_summary_pages)
-            .try_collect()?;
-
-        Ok(page_kinds)
-    }
-
-    fn post_assignment_summary_pages(&self) -> Result<&[PageRc]> {
-        let num_assignment_summary_pages = self.count_assignment_summary_pages()?;
-        let (_, post) = self.pages.split_at(num_assignment_summary_pages);
-        Ok(post)
-    }
-
-    fn post_assignment_summary_page_kinds<'a>(
-        &'a self,
-        pages: &'a [PageRc],
-    ) -> impl Iterator<Item = Result<PageKind>> + 'a {
-        pages
-            .iter()
-            .map(|page| self.post_assignment_summary_page_kind(page))
-    }
-
     #[tracing::instrument(level = "debug", skip(self), fields(num_pages = self.pages.len()), err, ret)]
     fn count_assignment_summary_pages(&self) -> Result<usize> {
-        let mut pages = self
-            .pages
+        self.pages
             .iter()
-            .zip(1..)
-            .inspect(|(_, page_number)| trace!(page_number))
-            .map(|(x, _)| x);
-
-        let num_assignment_summary_pages = pages
-            .by_ref()
-            .map(move |page| self.is_last_assignment_summary_page(page))
-            .take_while_inclusive(|result| !result.as_ref().copied().unwrap_or(false))
-            .fold_ok(0, |acc, _| acc + 1)?;
-
-        debug!(num_assignment_summary_pages);
-
-        let just_after = pages.next().ok_or_else(|| {
-            anyhow!("no pages after the {num_assignment_summary_pages} assignment summary pages")
-        })?;
-        if !self.is_just_after_assignment_summary_pages(just_after)? {
-            bail!("found unexpected page just after the {num_assignment_summary_pages} assignment summary pages");
-        }
-
-        Ok(num_assignment_summary_pages)
+            .map(|page| self.is_just_after_assignment_summary_pages(page))
+            .take_while(|result| !result.as_ref().copied().unwrap_or(false))
+            .fold_ok(0, |acc, _| acc + 1)
     }
 
-    /// When called on a sequence of pages starting with the first page, returns false until the
-    /// last of the assignment summary pages, when it returns true.
-    fn is_last_assignment_summary_page(&self, page: &Page) -> Result<bool> {
-        // The first place the Gradescope logo appears should appear is at the end of the last of
-        // the assignment summary pages. See also the comments in the implementation of
-        // `Self::gradescope_logo_ref`
-        self.has_gradescope_logo(page)
-    }
-
-    /// Determines if the given page is likely just after the assignment summary pages. In
-    /// particular, if the page does immediately follow the last assignment summary page, returns
-    /// true, and if not, is likely, but not guaranteed, to return false.
+    /// Determines if the given page is just after the assignment summary pages. In particular:
+    /// - if the page is an assignment summary page, returns false
+    /// - if the page is just after the last assignment summary page, returns true
+    /// - otherwise, there is no guarantee as to the return value
+    #[tracing::instrument(level = "debug", skip(self), err, ret)]
     fn is_just_after_assignment_summary_pages(&self, page: &Page) -> Result<bool> {
-        // The first page after the assignment summary is either a page of student submission (if
-        // they matched pages to the first question) or the question summary for the first question
-        // (if they did not).
+        // Suppose `page` is just after the assignment summary. Then the student must have submitted
+        // a nonzero number of pages, and their first page must be preceded by a summary page, so
+        // `page` is a summary page.
         //
-        // If the page is a student submission page, we can't tell from just it alone whether or not
-        // it immediately follows an assignment summary page, so we return true, since given only
-        // that information, it may.
+        // Conversely, all assignment summary pages are not summary pages, so we will not return
+        // `true` too early. We only have to guarantee behavior until one past the end of the
+        // assignment summary, so it doesn't matter whether or not there are further summary pages.
 
-        Ok(self.is_first_question_summary_page(page) || self.is_student_submission_page(page)?)
+        Ok(self.summary_page_questions(page)?.is_some())
     }
 
-    /// For pages after the assignment summary, determine their kind
-    fn post_assignment_summary_page_kind(&self, page: &Page) -> Result<PageKind> {
-        if self.is_student_submission_page(page)? {
-            Ok(PageKind::StudentSubmission)
-        } else {
-            // Must be question summary page, since it's not student submission and we're after the
-            // assignment summary.
-            self.get_number_of_question_summary(page)
-                .map(PageKind::QuestionSummary)
-        }
-    }
-
-    #[tracing::instrument(level = "trace", skip(self, page), err, ret)]
-    fn is_student_submission_page(&self, page: &Page) -> Result<bool> {
-        // If a page doesn't use fonts, it must be a student submission page. Student submissions
-        // are always included as images of their rendered PDF submissions, so usually don't have
-        // fonts. By contrast, other pages use fonts, since they have text for question numbers,
-        // grading, and so on. However, student submission pages sometimes do contain text; when
-        // graders leave comments, the location of their comments is marked by a numbered icon.
-        //
-        // To account for the rare case we do have a student submission page with fonts, we must
-        // check the images. Question summary pages always have the Gradescope logo, while student
-        // submission pages never do, but always contain at least the image of their work.
-
-        Ok(self.has_no_fonts(page)? || !self.has_gradescope_logo(page)?)
-    }
-
-    #[tracing::instrument(level = "trace", skip(self, page), err, ret)]
-    fn has_no_fonts(&self, page: &Page) -> Result<bool> {
-        Ok(page.resources()?.fonts.is_empty())
-    }
-
-    #[tracing::instrument(level = "trace", skip(self, page), err, ret)]
-    fn has_gradescope_logo(&self, page: &Page) -> Result<bool> {
-        Ok(page
-            .resources()?
-            .xobjects
-            .values()
-            .contains(&self.gradescope_logo_ref))
-    }
-
-    /// Is this a question summary page for the first question, i.e. the first question summary page
-    /// to appear in the PDF?
-    #[tracing::instrument(level = "trace", skip(self, page), ret)]
-    fn is_first_question_summary_page(&self, page: &Page) -> bool {
-        self.get_number_of_question_summary(page)
-            .map(|question_number| {
-                trace!(%question_number);
-                question_number
-            })
-            .map_err(|err| {
-                trace!(question_number_err = %err);
-                err
-            })
-            .as_ref()
-            .map_or(false, QuestionNumber::is_first)
+    /// Returns `Some` with a list of question numbers matched to the page, or `None` if it is not a
+    /// summary page. See also [`PageKind::Summary`].
+    #[tracing::instrument(level = "debug", skip(self), err, ret)]
+    fn summary_page_questions(&self, page: &Page) -> Result<Option<Vec<QuestionNumber>>> {
+        println!(
+            "{}",
+            self.page_ops_text(page).unwrap().collect_vec().join("")
+        );
+        Ok(None)
     }
 
     /// Given that the page is a question summary page, get the question number of the question
@@ -343,28 +169,3 @@ pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {
 }
 
 impl<S: Stream<Item = Result<SubmissionPdf>>> SubmissionPdfStream for S {}
-
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
-pub enum MatchingState {
-    Matched,
-    Unmatched,
-}
-
-/// Kinds of pages after the assignment summary pages, which are the first few, listing the
-/// assignment's name, student's name, score (if graded), every question with its rubric, and how
-/// each question scored on its rubric (if graded).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PageKind {
-    /// One page summarizing a single question (or part). Contains the same information about the
-    /// question as the assignment summary, but just for the one question.
-    ///
-    /// Comes immediately after all student submission pages matched to that question; these will be
-    /// copied and repeated if the same page was matched to several questions. When no pages were
-    /// matched to a question, no student submission page will appear immediately before it, so we
-    /// will see two question summary pages back-to-back.
-    QuestionSummary(QuestionNumber),
-    /// One of the pages of the student's submission. Notably, Gradescope renders submitted PDFs as
-    /// images, then uses those images for these pages. For that reason, there will never be text on
-    /// a student submission page, which we can use to detect them.
-    StudentSubmission,
-}
