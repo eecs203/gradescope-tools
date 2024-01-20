@@ -33,7 +33,7 @@ pub trait SubmissionExport: AsyncRead + Unpin + Send + Sized + 'static {
             .map(|result| {
                 tokio_rayon::spawn(move || {
                     let (filename, buf) = result?;
-                    pdf_to_submission_pdf(filename, buf)
+                    pdf_to_submission_pdf(filename, &buf)
                 })
             })
             .map(|x| x)
@@ -107,7 +107,7 @@ async fn try_read_pdf_buf(
     Some(Ok((filename, buf)))
 }
 
-fn pdf_to_submission_pdf(filename: String, buf: Vec<u8>) -> Result<SubmissionPdf> {
+fn pdf_to_submission_pdf(filename: String, buf: &[u8]) -> Result<SubmissionPdf> {
     let submission_pdf = SubmissionPdf::new(filename, buf)?;
     Ok(submission_pdf)
 }

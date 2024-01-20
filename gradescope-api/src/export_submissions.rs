@@ -101,7 +101,7 @@ pub fn files_as_submissions(
                 let id = SubmissionId::new(filename_stem.to_owned());
 
                 let submission =
-                    SubmissionPdf::new(filename, data).context("cannot read file as PDF")?;
+                    SubmissionPdf::new(filename, &data).context("cannot read file as PDF")?;
 
                 anyhow::Ok((id, submission))
             })
