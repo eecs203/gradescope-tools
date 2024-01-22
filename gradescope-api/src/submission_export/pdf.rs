@@ -8,8 +8,8 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
-use nom::character::complete::{anychar, char, digit1, space0};
-use nom::combinator::{eof, map_res, opt};
+use nom::character::complete::{anychar, char, digit1, multispace0};
+use nom::combinator::{eof, map_res};
 use nom::error::ParseError;
 use nom::multi::{many0, many_till, separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
@@ -34,8 +34,10 @@ impl SubmissionPdf {
             .expect("the stem should be UTF-8 since all of `filename` is");
         let submission_id = SubmissionId::new(filename_stem.to_owned());
 
-        let text =
+        let mut text =
             pdf_extract::extract_text_from_mem(pdf_data).context("could not parse data as PDF")?;
+        // Remove whitespace for reliability. See also `Self::matched_question_numbers`.
+        text.retain(|c| !c.is_whitespace());
 
         Ok(Self {
             submission_id,
@@ -73,6 +75,21 @@ impl SubmissionPdf {
             .map(UnmatchedQuestion::new))
     }
 
+    /// Ideally, the PDFs would provide structured data on which questions are matched to which
+    /// pages. Unfortunately, they do not do this, and are actually difficult to get anything out
+    /// of. Because of Gradescope's PDF creation process (apparently ultimately via Skia), and the
+    /// way PDFs handle text, each character is rendered separately, and encoded not via UTF-8 or
+    /// ASCII, but by a font-based mapping from bytes to symbols.
+    ///
+    /// Ideally we would process PDFs page-by-page for extra certainty that we're processing things
+    /// correctly. However, the only library I could find which correctly implemented a mapping from
+    /// the character encoding to UTF-8 doesn't seem to provide this functionality, but only gives
+    /// a single string containing all text from the PDF. Moreover, because each character is
+    /// rendered independently, whitespace is simply encoded as rendering the next character farther
+    /// away, so while the library makes a good attempt, there isn't a truly reliable way to detect
+    /// whitespace.
+    ///
+    /// So, the text we're parsing is a string of all text in the PDF, with all whitespace removed.
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn matched_question_numbers(&self) -> Result<Vec<QuestionNumber>> {
         pdf_text(&self.text)
@@ -84,7 +101,10 @@ impl SubmissionPdf {
 fn pdf_text(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
     delimited(
         // "Student", then later "Total Points", appear near the top of each PDF
-        tuple((skip_thru(tag("Student")), skip_thru(tag("Total Points")))),
+        tuple((
+            skip_thru(tag_ws("Student")),
+            skip_thru(tag_ws("Total Points")),
+        )),
         questions,
         eof,
     )(text)
@@ -102,18 +122,25 @@ fn page(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
 
 fn skip_thru_page_label(text: &str) -> IResult<&str, ()> {
     skip_thru(alt((
-        tag("Questions assigned to the following page:"),
-        tag("Question assigned to the following page:"),
-        tag("No questions assigned to the following page."),
+        tag_ws("Questions assigned to the following page:"),
+        tag_ws("Question assigned to the following page:"),
+        tag_ws("No questions assigned to the following page."),
     )))
     .map(|_| ())
     .parse(text)
 }
 
 fn question_num_list(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
-    let comma = tuple((space0, char(','), space0)).map(|_| ());
-    let comma_and = tuple((space0, char(','), space0, tag("and"), space0)).map(|_| ());
-    let and = tuple((space0, tag("and"), space0)).map(|_| ());
+    let comma = tuple((multispace0, char(','), multispace0)).map(|_| ());
+    let comma_and = tuple((
+        multispace0,
+        char(','),
+        multispace0,
+        tag_ws("and"),
+        multispace0,
+    ))
+    .map(|_| ());
+    let and = tuple((multispace0, tag_ws("and"), multispace0)).map(|_| ());
     let list_sep = alt((comma_and, comma, and));
     separated_list0(list_sep, question_num)(text)
 }
@@ -121,8 +148,8 @@ fn question_num_list(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
 fn question_num(text: &str) -> IResult<&str, QuestionNumber> {
     map_res(
         preceded(
-            space0,
-            separated_list1(tuple((space0, char('.'), space0)), digit1),
+            multispace0,
+            separated_list1(tuple((multispace0, char('.'), multispace0)), digit1),
         ),
         |parts| QuestionNumber::from_str(&parts.join(".")),
     )(text)
@@ -136,6 +163,12 @@ where
 {
     let mut comb_fn = move |input| comb.parse(input);
     move |input| many_till(anychar, &mut comb_fn).map(|_| ()).parse(input)
+}
+
+/// Like [`tag`], but strips out whitespace in the given string.
+fn tag_ws(target: &str) -> impl FnMut(&str) -> IResult<&str, ()> {
+    let target = target.split_whitespace().join("");
+    move |text| tag(target.as_str()).map(|_| ()).parse(text)
 }
 
 pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {

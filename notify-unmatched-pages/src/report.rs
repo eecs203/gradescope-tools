@@ -74,15 +74,8 @@ impl fmt::Display for UnmatchedQuestions {
         match self.questions.len() {
             0 => write!(f, "no questions"),
             1 => self.questions[0].fmt(f),
-            2 => write!(f, "{} and {}", &self.questions[0], &self.questions[1]),
-            n => {
-                let first_students = self.questions.iter().take(n - 1);
-                write!(
-                    f,
-                    "{}, and {}",
-                    first_students.format(", "),
-                    &self.questions[n - 1],
-                )
+            _ => {
+                write!(f, "\n  - {}", self.questions.iter().format("\n  - "))
             }
         }
     }
