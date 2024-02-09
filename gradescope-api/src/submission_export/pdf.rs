@@ -100,11 +100,8 @@ impl SubmissionPdf {
 
 fn pdf_text(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
     delimited(
-        // "Student", then later "Total Points", appear near the top of each PDF
-        tuple((
-            skip_thru(tag_ws("Student")),
-            skip_thru(tag_ws("Total Points")),
-        )),
+        // "Total Points" appears near the top of each PDF
+        skip_thru(tag_ws("Total Points")),
         questions,
         eof,
     )(text)
@@ -146,13 +143,9 @@ fn question_num_list(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
 }
 
 fn question_num(text: &str) -> IResult<&str, QuestionNumber> {
-    map_res(
-        preceded(
-            multispace0,
-            separated_list1(tuple((multispace0, char('.'), multispace0)), digit1),
-        ),
-        |parts| QuestionNumber::from_str(&parts.join(".")),
-    )(text)
+    map_res(separated_list1(char('.'), digit1), |parts| {
+        QuestionNumber::from_str(&parts.join("."))
+    })(text)
 }
 
 fn skip_thru<I, O, E>(mut comb: impl Parser<I, O, E>) -> impl FnMut(I) -> IResult<I, (), E>

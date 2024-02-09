@@ -1,6 +1,7 @@
-use core::fmt;
+use std::fmt;
 
 use anyhow::{Context, Result};
+use futures::Stream;
 use gradescope_api::assignment::{Assignment, AssignmentClient, AssignmentId, AssignmentName};
 use gradescope_api::course::{Course, CourseId};
 use gradescope_api::question::QuestionNumber;
@@ -81,28 +82,32 @@ impl fmt::Display for UnmatchedQuestions {
     }
 }
 
+pub trait UnmatchedReportStream: Stream<Item = Result<UnmatchedReport>> {}
+
+impl<T: Stream<Item = Result<UnmatchedReport>>> UnmatchedReportStream for T {}
+
 #[derive(Debug, Clone)]
-pub struct UnmatchedReport<'a> {
-    course_id: &'a CourseId,
-    assignment_id: &'a AssignmentId,
-    assignment_name: &'a AssignmentName,
+pub struct UnmatchedReport {
+    course_id: CourseId,
+    assignment_id: AssignmentId,
+    assignment_name: AssignmentName,
     submission_id: SubmissionId,
     student: UnmatchedStudent,
     unmatched: UnmatchedQuestions,
 }
 
-impl<'a> UnmatchedReport<'a> {
-    pub fn new(client: &'a AssignmentClient, nonmatching_submitter: NonmatchingSubmitter) -> Self {
+impl UnmatchedReport {
+    pub fn new(client: &AssignmentClient, nonmatching_submitter: NonmatchingSubmitter) -> Self {
         let student = UnmatchedStudent::new(nonmatching_submitter.student());
         let submission = nonmatching_submitter.submission();
         let submission_id = submission.id().clone();
         let unmatched = UnmatchedQuestions::new(submission.questions().iter().cloned());
 
         Self {
-            course_id: client.course().id(),
-            assignment_id: client.assignment().id(),
+            course_id: client.course().id().clone(),
+            assignment_id: client.assignment().id().clone(),
             submission_id,
-            assignment_name: client.assignment().name(),
+            assignment_name: client.assignment().name().clone(),
             student,
             unmatched,
         }
@@ -146,7 +151,7 @@ impl<'a> UnmatchedReport<'a> {
     }
 }
 
-impl<'a> fmt::Display for UnmatchedReport<'a> {
+impl fmt::Display for UnmatchedReport {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let (questions, these, them) = if self.unmatched.questions().len() == 1 {
             // Singular

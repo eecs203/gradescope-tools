@@ -1,6 +1,7 @@
 use std::fmt;
 
 use anyhow::Result;
+use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, serde_conv};
 
@@ -60,15 +61,15 @@ impl<'a> AssignmentClient<'a> {
         self.assignment
     }
 
-    pub async fn download_submission_export(&self) -> Result<impl SubmissionExport> {
+    pub async fn export_submissions(&self) -> Result<Response> {
         let gradescope = self.course_client.gradescope();
         let course = self.course_client.course();
 
-        let export = gradescope
+        let response = gradescope
             .export_submissions(course, self.assignment)
             .await?;
 
-        Ok(export)
+        Ok(response)
     }
 
     pub async fn outline(&self) -> Result<Outline> {

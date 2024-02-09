@@ -53,6 +53,10 @@ impl<'a> CourseClient<'a> {
         Self { gradescope, course }
     }
 
+    pub async fn get_assignments(&self) -> Result<Vec<Assignment>> {
+        self.gradescope().get_assignments(self.course()).await
+    }
+
     pub fn with_assignment(&self, assignment: &'a Assignment) -> AssignmentClient<'a> {
         AssignmentClient::new(*self, assignment)
     }

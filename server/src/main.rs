@@ -103,7 +103,7 @@ async fn notify_unmatched_pages(
     let assignment_client = course_client.with_assignment(assignment);
 
     let (submission_export, submission_to_student_map) = try_join(
-        assignment_client.download_submission_export(),
+        assignment_client.export_submissions(),
         assignment_client.submission_to_student_map(),
     )
     .await?;

@@ -1,15 +1,16 @@
 use std::path::Path;
-use std::{io, thread};
+use std::thread;
 
 use anyhow::{Context, Result};
-use async_zip::base::read::stream::ZipFileReader;
+use async_zip::base::read::seek::ZipFileReader;
 use async_zip::base::read::{WithEntry, ZipEntryReader};
+use async_zip::error::ZipError;
 use async_zip::ZipEntry;
 use futures::channel::mpsc;
-use futures::{AsyncRead, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{AsyncRead, AsyncSeek, SinkExt, Stream, StreamExt};
 use tokio::runtime::Handle;
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use tracing::{info, trace};
+use tracing::info;
 
 use self::pdf::{SubmissionPdf, SubmissionPdfStream};
 
@@ -19,15 +20,7 @@ pub async fn submissions_export_load(path: impl AsRef<Path>) -> Result<impl Subm
     Ok(tokio::fs::File::open(path).await?.compat())
 }
 
-pub fn submissions_export_from_response(response: reqwest::Response) -> impl SubmissionExport {
-    response
-        .bytes_stream()
-        .inspect_ok(|bytes| trace!(num_bytes = bytes.len(), "got submissions export byte chunk"))
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-        .into_async_read()
-}
-
-pub trait SubmissionExport: AsyncRead + Unpin + Send + Sized + 'static {
+pub trait SubmissionExport: AsyncRead + AsyncSeek + Unpin + Send + Sized + 'static {
     fn submissions(self) -> impl SubmissionPdfStream {
         submission_pdf_bufs(self)
             .map(|result| {
@@ -42,10 +35,10 @@ pub trait SubmissionExport: AsyncRead + Unpin + Send + Sized + 'static {
     }
 }
 
-impl<R: AsyncRead + Unpin + Send + 'static> SubmissionExport for R {}
+impl<R: AsyncRead + AsyncSeek + Unpin + Send + 'static> SubmissionExport for R {}
 
 fn submission_pdf_bufs(
-    export: impl SubmissionExport,
+    export: impl SubmissionExport + AsyncSeek,
 ) -> impl Stream<Item = Result<(String, Vec<u8>)>> {
     let (sender, receiver) = mpsc::unbounded();
     let handle = Handle::current();
@@ -54,26 +47,25 @@ fn submission_pdf_bufs(
         handle.block_on(async move {
             let send = |result| async { sender.clone().feed(result).await.unwrap() };
 
-            let mut zip = ZipFileReader::new(export);
-            loop {
-                match zip.next_with_entry().await {
-                    Ok(Some(mut zip_reading)) => {
-                        let reader = zip_reading.reader_mut();
+            let mut zip = match ZipFileReader::new(export).await {
+                Ok(zip) => zip,
+                Err(err) => {
+                    send(Err(err.into())).await;
+                    return;
+                }
+            };
 
-                        if let Some(result) = try_read_pdf_buf(reader).await {
+            let mut index = 0;
+            loop {
+                match zip.reader_with_entry(index).await {
+                    Ok(mut reader) => {
+                        index += 1;
+
+                        if let Some(result) = try_read_pdf_buf(&mut reader).await {
                             send(result).await;
                         }
-
-                        let result = zip_reading.skip().await;
-                        zip = match result {
-                            Ok(zip) => zip,
-                            Err(err) => {
-                                send(Err(err).context("cannot skip to next zip entry")).await;
-                                break;
-                            }
-                        };
                     }
-                    Ok(None) => break,
+                    Err(ZipError::EntryIndexOutOfBounds) => break,
                     Err(err) => {
                         send(Err(err).context("cannot read next zip entry")).await;
                         break;
@@ -86,8 +78,8 @@ fn submission_pdf_bufs(
     receiver
 }
 
-async fn try_read_pdf_buf(
-    reader: &mut ZipEntryReader<'_, impl AsyncRead + Unpin, WithEntry<'_>>,
+async fn try_read_pdf_buf<'a>(
+    reader: &mut ZipEntryReader<'a, impl SubmissionExport, WithEntry<'a>>,
 ) -> Option<Result<(String, Vec<u8>)>> {
     let entry = reader.entry();
     let filename = match entry_pdf_filename(entry)? {

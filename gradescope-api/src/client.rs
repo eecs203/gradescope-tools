@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use futures::Stream;
 use itertools::{Either, Itertools};
 use lazy_static::lazy_static;
 use reqwest::redirect::Policy;
@@ -17,13 +16,10 @@ use url::Url;
 use crate::assignment::{Assignment, AssignmentsTableProps};
 use crate::course::{Course, CourseId, Role};
 use crate::creds::Creds;
-use crate::export_submissions::{download_submission_export, files_as_submissions, read_zip};
 use crate::question::{AssignmentOutline, Outline, QuestionTitle};
 use crate::rate_limit::RateLimited;
 use crate::regrade::Regrade;
-use crate::submission::{SubmissionId, SubmissionsManagerProps};
-use crate::submission_export::pdf::SubmissionPdf;
-use crate::submission_export::{submissions_export_from_response, SubmissionExport};
+use crate::submission::SubmissionsManagerProps;
 use crate::types::{GraderName, StudentName};
 use crate::util::*;
 
@@ -391,34 +387,14 @@ impl Client<Auth> {
         &self,
         course: &Course,
         assignment: &Assignment,
-    ) -> Result<impl SubmissionExport> {
+    ) -> Result<Response> {
         let path = self.exported_submissions_path(course, assignment).await?;
         let request = self
             .gs(Method::GET, &path)
             .await
             .timeout(Duration::from_secs(60 * 60));
         let response = self.send(request).await?;
-        let export = submissions_export_from_response(response);
-        Ok(export)
-    }
-
-    pub async fn export_submissions_old(
-        &self,
-        course: &Course,
-        assignment: &Assignment,
-    ) -> Result<impl Stream<Item = Result<(SubmissionId, SubmissionPdf)>>> {
-        let path = self.exported_submissions_path(course, assignment).await?;
-        let request = self
-            .gs(Method::GET, &path)
-            .await
-            .timeout(Duration::from_secs(60 * 60));
-        let response = self.send(request).await?;
-
-        let zip = download_submission_export(response).await?;
-        let files = read_zip(zip);
-        let submissions = files_as_submissions(files);
-
-        Ok(submissions)
+        Ok(response)
     }
 
     /// Get the path to the exported submissions
