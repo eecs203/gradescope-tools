@@ -1,22 +1,12 @@
-use std::pin::pin;
+use std::fs::File;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use app_utils::{init_from_env, init_tracing, InitFromEnv};
-use futures::future::{try_join, try_join3};
-use futures::{future, pin_mut, stream, StreamExt, TryStreamExt};
-use gradescope_api::assignment::{Assignment, AssignmentId, AssignmentName};
+use futures::{pin_mut, StreamExt};
 use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::course::CourseClient;
-use gradescope_api::submission::SubmissionsManagerProps;
-use gradescope_api::submission_export::submissions_export_load;
-use gradescope_api::types::Points;
-use itertools::Itertools;
-use notify_unmatched_pages::identify::{
-    find_unsubmitted, save_submissions_to_fs, single_assignment,
-};
-use notify_unmatched_pages::report::{self, UnmatchedReport};
-use tokio::fs;
-use tracing::{debug, error, trace};
+use notify_unmatched_pages::identify::identify_unmatched;
+use tracing::debug;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,23 +19,26 @@ async fn main() -> Result<()> {
 
     let course_client = CourseClient::new(&gradescope, &course);
 
-    let assignments = gradescope
-        .get_assignments(&course)
-        .await
-        .context("could not get assignments from Gradescope")?;
-    trace!(?assignments, "got assignments");
+    let assignments = course_client.get_assignments().await?;
 
-    let assignment_selector = AssignmentSelector::new("Homework 2".to_owned());
-    let reports = single_assignment(&assignment_selector, &assignments, &course_client).await?;
+    let selectors = [
+        AssignmentSelector::new("Homework 3".to_owned()),
+        AssignmentSelector::new("Groupwork 3".to_owned()),
+        AssignmentSelector::new("Grading of Groupwork 2".to_owned()),
+    ];
+    let reports = identify_unmatched(&selectors, &assignments, &course_client).await;
     pin_mut!(reports);
 
+    let mut file = File::create("out/hw-3.csv")?;
     println!("Reports:");
     while let Some(report) = reports.next().await {
         match report {
             Ok(report) => {
+                use std::io::Write;
                 // println!("{report}");
                 // println!("{}", report.page_matching_link());
                 println!("{}", report.csv_string());
+                writeln!(&mut file, "{}", report.csv_string())?;
             }
             Err(err) => {
                 eprintln!("error!");

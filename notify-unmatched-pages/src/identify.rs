@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use futures::future::{try_join3, Either};
 use futures::{future, stream, FutureExt, StreamExt, TryStreamExt};
-use gradescope_api::assignment::{self, Assignment, AssignmentClient};
+use gradescope_api::assignment::{Assignment, AssignmentClient};
 use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::course::CourseClient;
 use gradescope_api::submission_export::pdf::SubmissionPdfStream;
@@ -16,26 +16,28 @@ use tracing::error;
 
 use crate::report::{UnmatchedReport, UnmatchedReportStream};
 
-pub async fn assignments(
-    selectors: &[AssignmentSelector],
-    assignments: &[Assignment],
-    course_client: &CourseClient<'_>,
-) -> Result<impl UnmatchedReportStream + '_> {
-    Ok(stream::iter(selectors)
-        .flat_map_unordered(None, |selector| {
-            let fut_res_stream = single_assignment(selector, assignments, course_client);
-
-            stream::once(single_assignment(selector, assignments, course_client)).map(|result| {
-                match result {
-                    Ok(stream) => Either::Left(stream),
-                    Err(err) => Either::Right(stream::iter([Err(err)])),
-                }
-            })
-        })
-        .await)
+pub async fn identify_unmatched<'a>(
+    selectors: &'a [AssignmentSelector],
+    assignments: &'a [Assignment],
+    course_client: &'a CourseClient<'a>,
+) -> impl UnmatchedReportStream + 'a {
+    stream::iter(selectors).flat_map_unordered(None, |selector| {
+        Box::pin(single_assignment_wrapper(selector, assignments, course_client).flatten_stream())
+    })
 }
 
-pub async fn single_assignment<'a>(
+async fn single_assignment_wrapper<'a>(
+    selector: &AssignmentSelector,
+    assignments: &'a [Assignment],
+    course_client: &CourseClient<'a>,
+) -> impl UnmatchedReportStream + 'a {
+    match single_assignment(selector, assignments, course_client).await {
+        Ok(stream) => Either::Left(stream),
+        Err(err) => Either::Right(stream::iter([Err(err)])),
+    }
+}
+
+async fn single_assignment<'a>(
     selector: &AssignmentSelector,
     assignments: &'a [Assignment],
     course_client: &CourseClient<'a>,
