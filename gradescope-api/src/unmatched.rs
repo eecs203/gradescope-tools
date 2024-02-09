@@ -76,11 +76,13 @@ fn id<A, B>(f: impl Fn(A) -> B) -> impl Fn(A) -> B {
     f
 }
 
-pub trait UnmatchedSubmissionStream: Stream<Item = Result<UnmatchedSubmission>> + Sized {
+pub trait UnmatchedSubmissionStream:
+    Stream<Item = Result<UnmatchedSubmission>> + Send + Sized
+{
     fn submitters(
         self,
         submission_to_student_map: SubmissionToStudentMap,
-    ) -> impl Stream<Item = Result<NonmatchingSubmitter>> {
+    ) -> impl Stream<Item = Result<NonmatchingSubmitter>> + Send {
         self.map_ok(id(move |unmatched_submission: UnmatchedSubmission| {
             unmatched_submission.submitters(submission_to_student_map.clone())
         }))
@@ -89,7 +91,7 @@ pub trait UnmatchedSubmissionStream: Stream<Item = Result<UnmatchedSubmission>> 
     }
 }
 
-impl<S: Stream<Item = Result<UnmatchedSubmission>>> UnmatchedSubmissionStream for S {}
+impl<S: Stream<Item = Result<UnmatchedSubmission>> + Send> UnmatchedSubmissionStream for S {}
 
 #[derive(Debug, Clone)]
 pub struct NonmatchingSubmitter {

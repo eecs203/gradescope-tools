@@ -164,7 +164,7 @@ fn tag_ws(target: &str) -> impl FnMut(&str) -> IResult<&str, ()> {
     move |text| tag(target.as_str()).map(|_| ()).parse(text)
 }
 
-pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {
+pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Send + Sized {
     fn unmatched(self, all_questions: Vec<Question>) -> impl UnmatchedSubmissionStream {
         let all_questions = Arc::new(all_questions);
         self.map(move |result| {
@@ -176,4 +176,4 @@ pub trait SubmissionPdfStream: Stream<Item = Result<SubmissionPdf>> + Sized {
     }
 }
 
-impl<S: Stream<Item = Result<SubmissionPdf>>> SubmissionPdfStream for S {}
+impl<S: Stream<Item = Result<SubmissionPdf>> + Send> SubmissionPdfStream for S {}
