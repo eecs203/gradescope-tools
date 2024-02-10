@@ -4,6 +4,7 @@ pub mod client;
 pub mod course;
 pub mod course_selector;
 pub mod creds;
+pub mod gs_service;
 pub mod question;
 pub mod rate_limit;
 pub mod regrade;

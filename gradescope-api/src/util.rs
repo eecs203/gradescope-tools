@@ -4,6 +4,7 @@ use scraper::ElementRef;
 use crate::assignment::Assignment;
 use crate::course::Course;
 
+pub const BASE_DOMAIN: &str = "www.gradescope.com";
 pub const BASE_URL: &str = "https://www.gradescope.com";
 pub const LOGIN_PATH: &str = "/login";
 pub const ACCOUNT_PATH: &str = "/account";
