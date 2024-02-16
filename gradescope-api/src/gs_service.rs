@@ -2,8 +2,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use reqwest::redirect::Policy;
-use reqwest::{Client as HttpClient, RequestBuilder, Response};
-use tower::{Service, ServiceBuilder, ServiceExt};
+use reqwest::{Client as HttpClient, Request, RequestBuilder, Response};
+use tower::steer::Steer;
+use tower::util::Either;
+use tower::{service_fn, Service, ServiceBuilder, ServiceExt};
 
 use crate::util::{BASE_DOMAIN, BASE_URL};
 
@@ -12,15 +14,11 @@ use crate::util::{BASE_DOMAIN, BASE_URL};
 /// specific requests for resources.
 pub async fn gs_service(
 ) -> Result<impl Service<RequestBuilder, Response = Response, Error = anyhow::Error>> {
-    let client = gs_client().await?;
-
     Ok(ServiceBuilder::new()
         .concurrency_limit(1)
         .rate_limit(1, Duration::from_secs(1))
         .map_err(|err: reqwest::Error| err.into())
-        .layer_fn(|service| )
-        .service_fn(|request: RequestBuilder| async { request.build() })
-        .and_then(client))
+        .service_fn(|request_builder: RequestBuilder| request_builder.send()))
 }
 
 async fn gs_client() -> Result<HttpClient> {
