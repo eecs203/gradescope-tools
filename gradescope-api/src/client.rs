@@ -19,22 +19,10 @@ use crate::creds::Creds;
 use crate::question::{AssignmentOutline, Outline, QuestionTitle};
 use crate::rate_limit::RateLimited;
 use crate::regrade::Regrade;
+use crate::selectors;
 use crate::submission::SubmissionsManagerProps;
 use crate::types::{GraderName, StudentName};
 use crate::util::*;
-
-macro_rules! selectors {
-    ($name:ident = $x:expr $(,)?) => {
-        lazy_static! { static ref $name: scraper::Selector = scraper::Selector::parse($x).unwrap(); }
-    };
-
-    ($name:ident = $x:expr, $($names:ident = $xs:expr),+ $(,)?) => {
-        selectors! { $name = $x }
-        selectors! {
-            $($names = $xs),+
-        }
-    };
-}
 
 selectors! {
     AUTHENTICITY_TOKEN = "form[action='/login'] input[name=authenticity_token]",
@@ -53,18 +41,14 @@ selectors! {
     CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
+trait GsService {}
+
 #[derive(Debug)]
-pub struct Client<State: ClientState> {
-    client: RateLimited<HttpClient>,
-    creds: Creds,
-    _state: State,
+pub struct Client<Service: GsService> {
+    service: Service,
 }
 
-impl<State: ClientState> Client<State> {
-    async fn http_client(&self) -> MutexGuard<HttpClient> {
-        self.client.get().await
-    }
-
+impl<Service: GsService> Client<Service> {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn gs(&self, method: Method, path: &str) -> RequestBuilder {
         let url = gs_url(path);
@@ -100,9 +84,7 @@ impl<State: ClientState> Client<State> {
         let text = response.text().await?;
         Ok(Html::parse_document(&text))
     }
-}
 
-impl Client<Init> {
     pub async fn from_env() -> Result<Self> {
         let creds = Creds::from_env()?;
         Client::new(creds).await
@@ -126,11 +108,12 @@ impl Client<Init> {
         // init cookies
         client.get(BASE_URL).send().await?;
 
-        Ok(Self {
-            client: RateLimited::new(client, Duration::from_secs(1)),
-            creds,
-            _state: Init,
-        })
+        // Ok(Self {
+        //     client: RateLimited::new(client, Duration::from_secs(1)),
+        //     creds,
+        //     _state: Init,
+        // })
+        todo!()
     }
 
     pub async fn login(self) -> Result<Client<Auth>> {
@@ -151,15 +134,16 @@ impl Client<Init> {
         let request = self.gs(Method::POST, LOGIN_PATH).await.form(&login_data);
         let response = self.send(request).await?;
 
-        if response.status().is_redirection() {
-            Ok(Client {
-                client: self.client,
-                creds: self.creds,
-                _state: Auth,
-            })
-        } else {
-            bail!("authentication failed")
-        }
+        // if response.status().is_redirection() {
+        //     Ok(Client {
+        //         client: self.client,
+        //         creds: self.creds,
+        //         _state: Auth,
+        //     })
+        // } else {
+        //     bail!("authentication failed")
+        // }
+        todo!()
     }
 
     async fn get_authenticity_token(&self) -> Result<String> {

@@ -21,18 +21,9 @@ pub async fn identify_unmatched<'a>(
     assignments: &'a [Assignment],
     course_client: &'a CourseClient<'a>,
 ) -> impl UnmatchedReportStream + 'a {
-    let handles = selectors
-        .iter()
-        .map(|selector| {
-            tokio::spawn(single_assignment_wrapper(
-                selector,
-                assignments,
-                course_client,
-            ))
-        })
-        .collect_vec();
-    let x = try_join_all(handles).await.unwrap();
-    stream::iter(x).flatten()
+    stream::iter(selectors).flat_map_unordered(None, |selector| {
+        Box::pin(single_assignment_wrapper(selector, assignments, course_client).flatten_stream())
+    })
 }
 
 async fn single_assignment_wrapper<'a>(

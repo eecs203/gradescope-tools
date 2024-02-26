@@ -4,6 +4,20 @@ use scraper::ElementRef;
 use crate::assignment::Assignment;
 use crate::course::Course;
 
+#[macro_export]
+macro_rules! selectors {
+    ($name:ident = $x:expr $(,)?) => {
+        ::lazy_static::lazy_static! { static ref $name: scraper::Selector = scraper::Selector::parse($x).unwrap(); }
+    };
+
+    ($name:ident = $x:expr, $($names:ident = $xs:expr),+ $(,)?) => {
+        selectors! { $name = $x }
+        selectors! {
+            $($names = $xs),+
+        }
+    };
+}
+
 pub const BASE_DOMAIN: &str = "www.gradescope.com";
 pub const BASE_URL: &str = "https://www.gradescope.com";
 pub const LOGIN_PATH: &str = "/login";

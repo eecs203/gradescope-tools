@@ -76,7 +76,7 @@ impl fmt::Display for UnmatchedQuestions {
             0 => write!(f, "no questions"),
             1 => self.questions[0].fmt(f),
             _ => {
-                write!(f, "\n  - {}", self.questions.iter().format("\n  - "))
+                write!(f, "{}", self.questions.iter().format(", "))
             }
         }
     }
@@ -141,7 +141,7 @@ impl UnmatchedReport {
         };
 
         format!(
-            "{};{};We found {} unmatched {questions} in your submission for {}: {}",
+            "{};{};\"We found {} unmatched {questions} in your submission for {}: {}\"",
             self.student.name(),
             self.student.email(),
             self.unmatched.questions().len(),

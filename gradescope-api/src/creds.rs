@@ -1,6 +1,7 @@
 use std::env::{self, VarError};
 use std::fmt;
 
+#[derive(Clone)]
 pub struct Creds {
     email: String,
     password: String,

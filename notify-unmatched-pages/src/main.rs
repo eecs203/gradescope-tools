@@ -22,14 +22,14 @@ async fn main() -> Result<()> {
     let assignments = course_client.get_assignments().await?;
 
     let selectors = [
-        AssignmentSelector::new("Homework 3".to_owned()),
-        AssignmentSelector::new("Groupwork 3".to_owned()),
-        AssignmentSelector::new("Grading of Groupwork 2".to_owned()),
+        AssignmentSelector::new("Homework 4".to_owned()),
+        AssignmentSelector::new("Groupwork 4".to_owned()),
+        AssignmentSelector::new("Grading of Groupwork 3".to_owned()),
     ];
     let reports = identify_unmatched(&selectors, &assignments, &course_client).await;
     pin_mut!(reports);
 
-    let mut file = File::create("out/hw-3.csv")?;
+    let mut file = File::create("out/hw-4.csv")?;
     println!("Reports:");
     while let Some(report) = reports.next().await {
         match report {

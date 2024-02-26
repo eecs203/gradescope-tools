@@ -22,6 +22,6 @@ serde_with = "3.2.0"
 tokio = { version = "1.28.2", features = ["full"] }
 tokio-rayon = "2.1.0"
 tokio-util = { version = "0.7.8", features = ["compat"] }
-tower = { version = "0.4.13", features = ["retry", "limit", "util", "steer"] }
+tower = { version = "0.4.13", features = ["limit", "util", "reconnect"] }
 tracing = "0.1.37"
 url = "2.4.0"
