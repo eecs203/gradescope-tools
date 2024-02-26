@@ -5,7 +5,8 @@ use serde::Deserialize;
 use serde_with::serde_conv;
 
 use crate::assignment::{Assignment, AssignmentClient};
-use crate::client::{Auth, Client};
+use crate::client::Client;
+use crate::services::gs_service::GsService;
 
 #[derive(Debug, Clone)]
 pub struct Course {
@@ -42,14 +43,22 @@ impl Course {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct CourseClient<'a> {
-    gradescope: &'a Client<Auth>,
+#[derive(Debug)]
+pub struct CourseClient<'a, Service> {
+    gradescope: &'a Client<Service>,
     course: &'a Course,
 }
 
-impl<'a> CourseClient<'a> {
-    pub fn new(gradescope: &'a Client<Auth>, course: &'a Course) -> Self {
+impl<'a, Service> Clone for CourseClient<'a, Service> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, Service> Copy for CourseClient<'a, Service> {}
+
+impl<'a, Service: GsService> CourseClient<'a, Service> {
+    pub fn new(gradescope: &'a Client<Service>, course: &'a Course) -> Self {
         Self { gradescope, course }
     }
 
@@ -57,11 +66,11 @@ impl<'a> CourseClient<'a> {
         self.gradescope().get_assignments(self.course()).await
     }
 
-    pub fn with_assignment(&self, assignment: &'a Assignment) -> AssignmentClient<'a> {
+    pub fn with_assignment(&self, assignment: &'a Assignment) -> AssignmentClient<'a, Service> {
         AssignmentClient::new(*self, assignment)
     }
 
-    pub fn gradescope(&self) -> &'a Client<Auth> {
+    pub fn gradescope(&self) -> &'a Client<Service> {
         self.gradescope
     }
 

@@ -1,15 +1,15 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use itertools::{Either, Itertools};
-use lazy_static::lazy_static;
-use reqwest::redirect::Policy;
-use reqwest::{Client as HttpClient, Method, RequestBuilder, Response};
+use reqwest::{Method, Response};
 use scraper::{CaseSensitivity, Element, ElementRef, Html};
 use serde::Deserialize;
-use tokio::sync::MutexGuard;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tower::{Service, ServiceExt};
 use tracing::{debug, info, warn};
 use url::Url;
 
@@ -17,9 +17,9 @@ use crate::assignment::{Assignment, AssignmentsTableProps};
 use crate::course::{Course, CourseId, Role};
 use crate::creds::Creds;
 use crate::question::{AssignmentOutline, Outline, QuestionTitle};
-use crate::rate_limit::RateLimited;
 use crate::regrade::Regrade;
 use crate::selectors;
+use crate::services::gs_service::{self, GsRequest, GsService, HtmlRequest};
 use crate::submission::SubmissionsManagerProps;
 use crate::types::{GraderName, StudentName};
 use crate::util::*;
@@ -41,125 +41,41 @@ selectors! {
     CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
-trait GsService {}
-
 #[derive(Debug)]
-pub struct Client<Service: GsService> {
-    service: Service,
+pub struct Client<Service> {
+    service: Mutex<Service>,
+}
+
+pub async fn client(creds: Creds) -> Result<Client<impl GsService>> {
+    Ok(Client {
+        service: Mutex::new(gs_service::service(creds).await?),
+    })
+}
+
+pub async fn client_from_env() -> Result<Client<impl GsService>> {
+    let creds = Creds::from_env()?;
+    client(creds).await
 }
 
 impl<Service: GsService> Client<Service> {
+    async fn request(&self, request: GsRequest) -> Result<Response> {
+        self.service.lock().await.ready().await?.call(request).await
+    }
+
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn gs(&self, method: Method, path: &str) -> RequestBuilder {
-        let url = gs_url(path);
-        info!(%url, %method, "preparing GS request");
-
-        self.http_client().await.request(method, url)
-    }
-
-    #[tracing::instrument(level = "debug", skip(self, csrf_token))]
-    async fn gs_ajax(&self, method: Method, path: &str, csrf_token: &str) -> RequestBuilder {
-        self.gs(method, path)
+    async fn html_request(&self, request: impl Into<HtmlRequest> + Debug) -> Result<Html> {
+        self.service
+            .lock()
             .await
-            .header("X-Requested-With", "XMLHttpRequest")
-            .header("X-CSRF-Token", csrf_token)
-    }
-
-    async fn send(&self, request: RequestBuilder) -> Result<Response> {
-        let response = request
-            .send()
-            .await
-            .context("GS request failed")?
-            .error_for_status()
-            .context("GS responded with an error")?;
-        Ok(response)
-    }
-
-    async fn get_gs_html(&self, path: &str) -> Result<Html> {
-        let request = self
-            .gs(Method::GET, path)
-            .await
-            .header("Accept", "text/html");
-        let response = self.send(request).await?;
-        let text = response.text().await?;
-        Ok(Html::parse_document(&text))
-    }
-
-    pub async fn from_env() -> Result<Self> {
-        let creds = Creds::from_env()?;
-        Client::new(creds).await
-    }
-
-    pub async fn new(creds: Creds) -> Result<Self> {
-        let redirect_policy = Policy::custom(|attempt| {
-            if attempt.url().domain() == Some("www.gradescope.com") {
-                Policy::none().redirect(attempt)
-            } else {
-                Policy::default().redirect(attempt)
-            }
-        });
-
-        let client = HttpClient::builder()
-            .cookie_store(true)
-            .redirect(redirect_policy)
-            .timeout(Duration::from_secs(30))
-            .build()?;
-
-        // init cookies
-        client.get(BASE_URL).send().await?;
-
-        // Ok(Self {
-        //     client: RateLimited::new(client, Duration::from_secs(1)),
-        //     creds,
-        //     _state: Init,
-        // })
-        todo!()
-    }
-
-    pub async fn login(self) -> Result<Client<Auth>> {
-        let authenticity_token = self.get_authenticity_token().await?;
-
-        let login_data = {
-            let mut login_data = HashMap::new();
-            login_data.insert("utf8", "✓");
-            login_data.insert("session[email]", self.creds.email());
-            login_data.insert("session[password]", self.creds.password());
-            login_data.insert("session[remember_me]", "0");
-            login_data.insert("commit", "Log In");
-            login_data.insert("session[remember_me_sso]", "0");
-            login_data.insert("authenticity_token", &authenticity_token);
-            login_data
-        };
-
-        let request = self.gs(Method::POST, LOGIN_PATH).await.form(&login_data);
-        let response = self.send(request).await?;
-
-        // if response.status().is_redirection() {
-        //     Ok(Client {
-        //         client: self.client,
-        //         creds: self.creds,
-        //         _state: Auth,
-        //     })
-        // } else {
-        //     bail!("authentication failed")
-        // }
-        todo!()
-    }
-
-    async fn get_authenticity_token(&self) -> Result<String> {
-        self.get_gs_html(LOGIN_PATH)
+            .as_html_service()
+            .ready()
             .await?
-            .select(&AUTHENTICITY_TOKEN)
-            .next()
-            .and_then(|el| el.value().attr("value"))
-            .context("could not find `authenticity_token`")
-            .map(|token| token.to_owned())
+            .call(request.into())
+            .await
     }
-}
 
-impl Client<Auth> {
     pub async fn get_courses(&self) -> Result<Vec<Course>> {
-        let account_page = self.get_gs_html(ACCOUNT_PATH).await?;
+        let account_page = self.html_request(ACCOUNT_PATH).await?;
         let course_list_headings = account_page
             .select(&COURSE_LIST_HEADING)
             .filter_map(|el| {
@@ -211,7 +127,7 @@ impl Client<Auth> {
     #[tracing::instrument(skip(self), ret, err)]
     pub async fn get_assignments(&self, course: &Course) -> Result<Vec<Assignment>> {
         let assignments_page = self
-            .get_gs_html(&gs_course_path(course, ASSIGNMENTS_COURSE_PATH))
+            .html_request(gs_course_path(course, ASSIGNMENTS_COURSE_PATH))
             .await?;
 
         let assignments_table = assignments_page
@@ -240,7 +156,7 @@ impl Client<Auth> {
         assignment: &Assignment,
     ) -> Result<Vec<Regrade>> {
         let regrade_page = self
-            .get_gs_html(&gs_assignment_path(
+            .html_request(gs_assignment_path(
                 course,
                 assignment,
                 REGRADES_ASSIGNMENT_PATH,
@@ -301,7 +217,7 @@ impl Client<Auth> {
 
     pub async fn get_outline(&self, course: &Course, assignment: &Assignment) -> Result<Outline> {
         let outline_page = self
-            .get_gs_html(&gs_assignment_path(
+            .html_request(gs_assignment_path(
                 course,
                 assignment,
                 OUTLINE_ASSIGNMENT_PATH,
@@ -333,7 +249,7 @@ impl Client<Auth> {
         assignment: &Assignment,
     ) -> Result<SubmissionsManagerProps> {
         let manage_submissions_page = self
-            .get_gs_html(&gs_manage_submissions_path(course, assignment))
+            .html_request(gs_manage_submissions_path(course, assignment))
             .await
             .context("cannot get \"manage submissions\" page")?;
 
@@ -373,11 +289,11 @@ impl Client<Auth> {
         assignment: &Assignment,
     ) -> Result<Response> {
         let path = self.exported_submissions_path(course, assignment).await?;
-        let request = self
-            .gs(Method::GET, &path)
-            .await
-            .timeout(Duration::from_secs(60 * 60));
-        let response = self.send(request).await?;
+        let response = self
+            .request(
+                GsRequest::new_direct(Method::GET, path).with_timeout(Duration::from_secs(60 * 60)),
+            )
+            .await?;
         Ok(response)
     }
 
@@ -391,7 +307,7 @@ impl Client<Auth> {
         // function should be correct without this block, but the compiler can't tell.
         let result = {
             let review_grades_page = self
-                .get_gs_html(&gs_review_grades_path(course, assignment))
+                .html_request(gs_review_grades_path(course, assignment))
                 .await
                 .context("getting review grades")?;
 
@@ -417,7 +333,7 @@ impl Client<Auth> {
         match result {
             Either::Left(path) => Ok(path),
             Either::Right(csrf_token) => {
-                self.request_export_submissions(course, assignment, &csrf_token)
+                self.request_export_submissions(course, assignment, csrf_token)
                     .await
             }
         }
@@ -462,11 +378,12 @@ impl Client<Auth> {
         &self,
         course: &Course,
         assignment: &Assignment,
-        csrf_token: &str,
+        csrf_token: String,
     ) -> Result<String> {
         let path = gs_assignment_path(course, assignment, "/export");
-        let request = self.gs_ajax(Method::POST, &path, csrf_token).await;
-        let response = self.send(request).await?;
+        let response = self
+            .request(GsRequest::new_ajax(Method::POST, path, csrf_token.clone()))
+            .await?;
 
         let status_path = response
             .json::<ExportSubmissionsResponse>()
@@ -482,11 +399,16 @@ impl Client<Auth> {
         &self,
         course: &Course,
         status_path: &str,
-        csrf_token: &str,
+        csrf_token: String,
     ) -> Result<String> {
         loop {
-            let request = self.gs_ajax(Method::GET, status_path, csrf_token).await;
-            let response = self.send(request).await?;
+            let response = self
+                .request(GsRequest::new_ajax(
+                    Method::GET,
+                    status_path.to_owned(),
+                    csrf_token.clone(),
+                ))
+                .await?;
 
             let status = response.json::<ExportSubmissionsStatus>().await?;
 
@@ -504,15 +426,6 @@ impl Client<Auth> {
         }
     }
 }
-
-#[derive(Debug)]
-pub struct Init;
-#[derive(Debug)]
-pub struct Auth;
-
-pub trait ClientState {}
-impl ClientState for Init {}
-impl ClientState for Auth {}
 
 #[derive(Deserialize)]
 struct ExportSubmissionsResponse {

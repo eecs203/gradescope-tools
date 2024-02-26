@@ -7,8 +7,8 @@ use serde_with::{serde_as, serde_conv};
 
 use crate::course::{Course, CourseClient};
 use crate::question::Outline;
+use crate::services::gs_service::GsService;
 use crate::submission::SubmissionToStudentMap;
-use crate::submission_export::SubmissionExport;
 use crate::types::Points;
 
 #[serde_as]
@@ -40,13 +40,13 @@ impl Assignment {
     }
 }
 
-pub struct AssignmentClient<'a> {
-    course_client: CourseClient<'a>,
+pub struct AssignmentClient<'a, Service> {
+    course_client: CourseClient<'a, Service>,
     assignment: &'a Assignment,
 }
 
-impl<'a> AssignmentClient<'a> {
-    pub fn new(course_client: CourseClient<'a>, assignment: &'a Assignment) -> Self {
+impl<'a, Service: GsService> AssignmentClient<'a, Service> {
+    pub fn new(course_client: CourseClient<'a, Service>, assignment: &'a Assignment) -> Self {
         Self {
             course_client,
             assignment,

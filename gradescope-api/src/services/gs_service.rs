@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::{Client as HttpClient, Method, RequestBuilder, Response};
@@ -35,7 +36,14 @@ pub async fn service(creds: Creds) -> Result<impl GsService> {
         .map_err(|err: Box<dyn std::error::Error + Send + Sync>| anyhow!(err)))
 }
 
-trait GsService: Service<GsRequest, Response = Response, Error = anyhow::Error> {}
+pub trait GsService: Service<GsRequest, Response = Response, Error = anyhow::Error> {
+    fn as_html_service(&mut self) -> impl HtmlService
+    where
+        Self: Sized,
+    {
+        html_service(self)
+    }
+}
 impl<T: Service<GsRequest, Response = Response, Error = anyhow::Error>> GsService for T {}
 
 async fn authed_service(
@@ -106,7 +114,8 @@ fn html_service(unauthed: impl UnauthedService) -> impl HtmlService {
 trait HtmlService: Service<HtmlRequest, Response = Html, Error = anyhow::Error> {}
 impl<T: Service<HtmlRequest, Response = Html, Error = anyhow::Error>> HtmlService for T {}
 
-struct HtmlRequest {
+#[derive(Debug)]
+pub struct HtmlRequest {
     path: String,
 }
 
@@ -117,6 +126,18 @@ impl HtmlRequest {
 
     pub fn gs_request(self) -> GsRequest {
         GsRequest::new_html(self.path)
+    }
+}
+
+impl From<String> for HtmlRequest {
+    fn from(path: String) -> Self {
+        Self { path }
+    }
+}
+
+impl<'a> From<&'a str> for HtmlRequest {
+    fn from(path: &'a str) -> Self {
+        path.to_owned().into()
     }
 }
 
@@ -132,11 +153,12 @@ fn unauthed_service<'a>(
 trait UnauthedService: Service<GsRequest, Response = Response, Error = anyhow::Error> {}
 impl<T: Service<GsRequest, Response = Response, Error = anyhow::Error>> UnauthedService for T {}
 
-pub(crate) struct GsRequest {
+pub struct GsRequest {
     method: Method,
     path: String,
-    extra: HashMap<String, String>,
+    headers: HashMap<String, String>,
     form: Option<serde_json::Value>,
+    timeout: Option<Duration>,
 }
 
 impl GsRequest {
@@ -144,33 +166,36 @@ impl GsRequest {
         Self {
             method,
             path,
-            extra: HashMap::new(),
+            headers: HashMap::new(),
             form: None,
+            timeout: None,
         }
     }
 
     pub fn new_html(path: String) -> Self {
-        let mut extra = HashMap::new();
-        extra.insert("Accept", "text/html");
+        let mut headers = HashMap::new();
+        headers.insert("Accept".to_owned(), "text/html".to_owned());
 
         Self {
             method: Method::GET,
             path,
-            extra,
+            headers,
             form: None,
+            timeout: None,
         }
     }
 
-    pub fn new_ajax(method: Method, path: String, csrf_token: &str) -> Self {
-        let mut extra = HashMap::new();
-        extra.insert("X-Requested-With", "XMLHttpRequest");
-        extra.insert("X-CSRF-Token", &csrf_token);
+    pub fn new_ajax(method: Method, path: String, csrf_token: String) -> Self {
+        let mut headers = HashMap::new();
+        headers.insert("X-Requested-With".to_owned(), "XMLHttpRequest".to_owned());
+        headers.insert("X-CSRF-Token".to_owned(), csrf_token);
 
         Self {
             method,
             path,
-            extra,
+            headers,
             form: None,
+            timeout: None,
         }
     }
 
@@ -179,23 +204,32 @@ impl GsRequest {
         self
     }
 
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
     pub fn request_builder(&self, http_client: &HttpClient) -> RequestBuilder {
         let url = gs_url(&self.path);
         let base = http_client.request(self.method.clone(), url);
 
         let with_headers = self
-            .extra
+            .headers
             .iter()
             .fold(base, |request_builder, (key, value)| {
                 request_builder.header(key, value)
             });
 
-        let with_form = if let Some(data) = self.form {
-            with_headers.form(&data)
+        let with_form = if let Some(data) = &self.form {
+            with_headers.form(data)
         } else {
             with_headers
         };
 
-        with_form
+        if let Some(timeout) = &self.timeout {
+            with_form.timeout(*timeout)
+        } else {
+            with_form
+        }
     }
 }
