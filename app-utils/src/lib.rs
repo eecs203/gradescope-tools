@@ -2,21 +2,21 @@ use std::env;
 
 use anyhow::{Context, Result};
 use dotenvy::dotenv;
-use gradescope_api::client::{Auth, Client};
+use gradescope_api::client::{client_from_env, Client};
 use gradescope_api::course::Course;
-use gradescope_api::course_selector::{self, CourseSelector};
-use tracing::info;
+use gradescope_api::course_selector::CourseSelector;
+use gradescope_api::services::gs_service::GsService;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::format;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, registry, EnvFilter};
 
-pub async fn init_from_env() -> Result<InitFromEnv> {
+pub async fn init_from_env() -> Result<InitFromEnv<impl GsService>> {
     dotenv().unwrap();
 
     let course_selector = course_selector_from_env();
 
-    let gradescope = Client::from_env().await?.login().await?;
+    let gradescope = client_from_env().await?;
 
     let courses = gradescope.get_courses().await?;
     let course = course_selector
@@ -27,9 +27,9 @@ pub async fn init_from_env() -> Result<InitFromEnv> {
     Ok(InitFromEnv { course, gradescope })
 }
 
-pub struct InitFromEnv {
+pub struct InitFromEnv<Service> {
     pub course: Course,
-    pub gradescope: Client<Auth>,
+    pub gradescope: Client<Service>,
 }
 
 pub fn db_url_from_env() -> String {

@@ -5,6 +5,7 @@ use futures::Stream;
 use gradescope_api::assignment::{Assignment, AssignmentClient, AssignmentId, AssignmentName};
 use gradescope_api::course::{Course, CourseId};
 use gradescope_api::question::QuestionNumber;
+use gradescope_api::services::gs_service::GsService;
 use gradescope_api::submission::{StudentSubmitter, SubmissionId};
 use gradescope_api::types::{Email, StudentName};
 use gradescope_api::unmatched::{NonmatchingSubmitter, UnmatchedQuestion};
@@ -12,6 +13,7 @@ use itertools::Itertools;
 use lettre::message::header::ContentType;
 use lettre::message::Mailbox;
 use lettre::{Address, AsyncSendmailTransport, Message};
+use serde::Serialize;
 
 use crate::sender::Sender;
 
@@ -97,7 +99,10 @@ pub struct UnmatchedReport {
 }
 
 impl UnmatchedReport {
-    pub fn new(client: &AssignmentClient, nonmatching_submitter: NonmatchingSubmitter) -> Self {
+    pub fn new(
+        client: &AssignmentClient<impl GsService>,
+        nonmatching_submitter: NonmatchingSubmitter,
+    ) -> Self {
         let student = UnmatchedStudent::new(nonmatching_submitter.student());
         let submission = nonmatching_submitter.submission();
         let submission_id = submission.id().clone();
@@ -128,6 +133,23 @@ impl UnmatchedReport {
         format!(
             "https://www.gradescope.com/courses/{}/assignments/{}/submissions/{}/select_pages",
             self.course_id, self.assignment_id, self.submission_id
+        )
+    }
+
+    pub fn message(&self) -> String {
+        let (questions, these, them) = if self.unmatched.questions().len() == 1 {
+            // Singular
+            ("question", "this", "it")
+        } else {
+            // Plural
+            ("questions", "these", "them")
+        };
+
+        format!(
+            "We found {} unmatched {questions} in your submission for {}: {}",
+            self.unmatched.questions().len(),
+            self.assignment_name,
+            self.unmatched,
         )
     }
 
@@ -166,5 +188,24 @@ impl fmt::Display for UnmatchedReport {
             "{}:\n\nWe found {} unmatched {questions} in your submission for {}: {}\n\nIf you would like {these} {questions} to be graded, please match pages for {them} as soon as possible.\n\n- EECS 203",
             self.student, self.unmatched.questions().len(), self.assignment_name, self.unmatched,
         )
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct UnmatchedReportRecord {
+    name: String,
+    email: String,
+    message: String,
+    link: String,
+}
+
+impl UnmatchedReportRecord {
+    pub fn new(report: UnmatchedReport) -> Self {
+        Self {
+            name: report.student.name().to_string(),
+            email: report.student.email().to_string(),
+            message: report.message(),
+            link: report.page_matching_link(),
+        }
     }
 }

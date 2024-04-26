@@ -4,9 +4,10 @@ use std::ops::Deref;
 use anyhow::Result;
 use futures::{stream, StreamExt, TryStreamExt};
 use gradescope_api::assignment::Assignment;
-use gradescope_api::client::{Auth, Client};
+use gradescope_api::client::Client;
 use gradescope_api::course::Course;
 use gradescope_api::regrade::Regrade;
+use gradescope_api::services::gs_service::GsService;
 use itertools::Itertools;
 
 pub fn find_exams(assignments: &[Assignment]) -> HashMap<&str, Vec<Exam>> {
@@ -16,7 +17,7 @@ pub fn find_exams(assignments: &[Assignment]) -> HashMap<&str, Vec<Exam>> {
 
 pub async fn get_exam_regrades<'a>(
     exams: &HashMap<&'a str, Vec<Exam<'a>>>,
-    gradescope: &Client<Auth>,
+    gradescope: &Client<impl GsService>,
     course: &Course,
 ) -> Result<HashMap<&'a str, Vec<(Exam<'a>, Vec<Regrade>)>>> {
     let get_regrades = |assignment| gradescope.get_regrades(course, assignment);

@@ -22,9 +22,10 @@ use std::ops::Deref;
 use anyhow::Result;
 use futures::{stream, StreamExt, TryStreamExt};
 use gradescope_api::assignment::Assignment;
-use gradescope_api::client::{Auth, Client};
+use gradescope_api::client::Client;
 use gradescope_api::course::Course;
 use gradescope_api::regrade::Regrade;
+use gradescope_api::services::gs_service::GsService;
 use gradescope_api::types::{GraderName, StudentName};
 use serde::Serialize;
 
@@ -48,7 +49,7 @@ pub fn find_homeworks(assignments: &[Assignment]) -> HashMap<HwNumber, HwPair> {
 
 pub async fn get_homework_regrades<'a>(
     homeworks: &HashMap<HwNumber<'a>, HwPair<'_>>,
-    gradescope: &Client<Auth>,
+    gradescope: &Client<impl GsService>,
     course: &Course,
 ) -> Result<HashMap<HwNumber<'a>, RegradesPair>> {
     stream::iter(homeworks)

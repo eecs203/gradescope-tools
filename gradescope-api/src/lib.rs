@@ -7,7 +7,7 @@ pub mod creds;
 pub mod question;
 pub mod rate_limit;
 pub mod regrade;
-pub(crate) mod services;
+pub mod services;
 pub mod submission;
 pub mod submission_export;
 pub mod types;
