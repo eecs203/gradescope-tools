@@ -3,7 +3,6 @@ members = [
     "gradescope-api",
     "lib203",
     "app-utils",
-    "gradescope-to-db",
     "notify-unmatched-pages",
     "server",
 ]

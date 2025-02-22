@@ -414,6 +414,10 @@ impl<Service: GsService> Client<Service> {
 
             if status.completed() {
                 info!("export complete!");
+
+                // Gradescope claims to be complete before the file is ready in S3, so wait a bit
+                tokio::time::sleep(Duration::from_secs(60)).await;
+
                 break Ok(status.download_path(course));
             }
 

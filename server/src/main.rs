@@ -11,6 +11,7 @@ use gradescope_api::course::CourseClient;
 use gradescope_api::submission_export::pdf::SubmissionPdfStream;
 use gradescope_api::submission_export::SubmissionExport;
 use log::{init_tracing, SlackLayer};
+use notify_unmatched_pages::identify::identify_unmatched;
 use notify_unmatched_pages::report::UnmatchedReport;
 use slack_morphism::prelude::*;
 use tracing::{error, info};
@@ -99,6 +100,11 @@ async fn notify_unmatched_pages(
     info!(?assignment, "got target assignment");
 
     let course_client = CourseClient::new(&gradescope, &course);
+
+    let selectors: Vec<AssignmentSelector> = todo!();
+    let assignments = course_client.get_assignments().await?;
+
+    let reports = identify_unmatched(&selectors, &assignments, &course_client).await;
 
     let assignment_client = course_client.with_assignment(assignment);
 
