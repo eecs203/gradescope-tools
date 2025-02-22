@@ -3,7 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as AnyhowContext, Result};
+use anyhow::{Context as AnyhowContext, Result, anyhow};
 use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use nom::branch::alt;
@@ -11,7 +11,7 @@ use nom::bytes::complete::tag;
 use nom::character::complete::{anychar, char, digit1, multispace0};
 use nom::combinator::{eof, map_res};
 use nom::error::ParseError;
-use nom::multi::{many0, many_till, separated_list0, separated_list1};
+use nom::multi::{many_till, many0, separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::{AsChar, IResult, InputIter, InputLength, Parser, Slice};
 

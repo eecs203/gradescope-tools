@@ -2,10 +2,10 @@ use std::path::Path;
 use std::thread;
 
 use anyhow::{Context, Result};
+use async_zip::ZipEntry;
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::base::read::{WithEntry, ZipEntryReader};
 use async_zip::error::ZipError;
-use async_zip::ZipEntry;
 use futures::channel::mpsc;
 use futures::{AsyncRead, AsyncSeek, SinkExt, Stream, StreamExt};
 use tokio::runtime::Handle;
@@ -38,7 +38,7 @@ pub trait SubmissionExport: AsyncRead + AsyncSeek + Unpin + Send + Sized + 'stat
 impl<R: AsyncRead + AsyncSeek + Unpin + Send + 'static> SubmissionExport for R {}
 
 fn submission_pdf_bufs(
-    export: impl SubmissionExport + AsyncSeek,
+    export: impl SubmissionExport,
 ) -> impl Stream<Item = Result<(String, Vec<u8>)>> {
     let (sender, receiver) = mpsc::unbounded();
     let handle = Handle::current();

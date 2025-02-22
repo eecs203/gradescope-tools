@@ -1,7 +1,7 @@
 use anyhow::Result;
-use app_utils::{init_from_env, init_tracing, InitFromEnv};
-use clap::{command, Arg, ArgAction};
-use futures::{pin_mut, StreamExt};
+use app_utils::{InitFromEnv, init_from_env, init_tracing};
+use clap::{Arg, ArgAction, command};
+use futures::{StreamExt, pin_mut};
 use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::course::CourseClient;
 use itertools::Itertools;
@@ -41,11 +41,6 @@ async fn main() -> Result<()> {
 
     let assignments = course_client.get_assignments().await?;
 
-    // let selectors = [
-    //     AssignmentSelector::new("Homework 9".to_owned()),
-    //     AssignmentSelector::new("Groupwork 9".to_owned()),
-    //     AssignmentSelector::new("Grading of Groupwork 8".to_owned()),
-    // ];
     let reports = identify_unmatched(&selectors, &assignments, &course_client).await;
     pin_mut!(reports);
 

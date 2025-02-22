@@ -1,18 +1,18 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use reqwest::{Client as HttpClient, Method, RequestBuilder, Response};
 use scraper::Html;
 use tower::reconnect::Reconnect;
-use tower::{service_fn, Service, ServiceBuilder, ServiceExt};
+use tower::{Service, ServiceBuilder, ServiceExt, service_fn};
 
 use crate::creds::Creds;
 use crate::selectors;
 use crate::services::scraper_service;
-use crate::util::{gs_url, LOGIN_PATH};
+use crate::util::{LOGIN_PATH, gs_url};
 
-use super::scraper_service::{http_client, ScraperService};
+use super::scraper_service::{ScraperService, http_client};
 
 selectors! {
     AUTHENTICITY_TOKEN = "form[action='/login'] input[name=authenticity_token]",

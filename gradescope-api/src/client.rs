@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use itertools::{Either, Itertools};
 use reqwest::{Method, Response};
 use scraper::{CaseSensitivity, Element, ElementRef, Html};

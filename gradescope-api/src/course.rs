@@ -49,13 +49,13 @@ pub struct CourseClient<'a, Service> {
     course: &'a Course,
 }
 
-impl<'a, Service> Clone for CourseClient<'a, Service> {
+impl<Service> Clone for CourseClient<'_, Service> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, Service> Copy for CourseClient<'a, Service> {}
+impl<Service> Copy for CourseClient<'_, Service> {}
 
 impl<'a, Service: GsService> CourseClient<'a, Service> {
     pub fn new(gradescope: &'a Client<Service>, course: &'a Course) -> Self {

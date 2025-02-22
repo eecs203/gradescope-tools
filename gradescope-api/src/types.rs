@@ -4,9 +4,9 @@
 use std::fmt;
 use std::num::FpCategory;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_with::{serde_as, serde_conv, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as, serde_conv};
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
@@ -99,7 +99,9 @@ impl Points {
     pub fn new(points: f32) -> Result<Self> {
         match points.classify() {
             FpCategory::Normal => Ok(Self { points }),
-            category => bail!("attempted to construct points with value `{points}`, which has non-normal category `{category:?}`"),
+            category => bail!(
+                "attempted to construct points with value `{points}`, which has non-normal category `{category:?}`"
+            ),
         }
     }
 

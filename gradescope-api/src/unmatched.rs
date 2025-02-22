@@ -2,7 +2,7 @@ use core::fmt;
 use std::iter;
 
 use anyhow::{Context as AnyhowContext, Result};
-use futures::{stream, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, stream};
 use itertools::Either;
 
 use crate::question::Question;

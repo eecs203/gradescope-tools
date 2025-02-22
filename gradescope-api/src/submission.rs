@@ -2,7 +2,7 @@ use core::fmt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use itertools::Itertools;
 use serde::Deserialize;
 use serde_with::{serde_as, serde_conv};
