@@ -55,7 +55,7 @@ pub fn id_from_link(link: ElementRef) -> Result<String> {
         .attr("href")
         .context("could not get id from link: no href attribute found")?
         .split('/')
-        .last()
+        .next_back()
         .context("could not get id from link: href did not have a last component")
         .map(ToOwned::to_owned)
 }
