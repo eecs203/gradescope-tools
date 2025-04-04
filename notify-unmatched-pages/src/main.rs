@@ -5,9 +5,9 @@ use futures::{StreamExt, pin_mut};
 use gradescope_api::assignment_selector::AssignmentSelector;
 use gradescope_api::course::CourseClient;
 use itertools::Itertools;
-use notify_unmatched_pages::identify::identify_unmatched;
+use notify_unmatched_pages::identify::report_unmatched_many_assignments;
 use notify_unmatched_pages::report::UnmatchedReportRecord;
-use tracing::debug;
+use tracing::{debug, error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +29,6 @@ async fn main() -> Result<()> {
         .get_matches();
 
     let out_path = matches.get_one::<String>("out").unwrap();
-
     let selectors = matches
         .get_many::<String>("assignment")
         .unwrap_or_default()
@@ -39,32 +38,29 @@ async fn main() -> Result<()> {
 
     let course_client = CourseClient::new(&gradescope, &course);
 
-    let assignments = course_client.get_assignments().await?;
+    let all_assignments = course_client.get_assignments().await?;
 
-    let reports = identify_unmatched(&selectors, &assignments, &course_client).await;
+    let assignments: Vec<_> = selectors
+        .iter()
+        .map(|selector| selector.select_from(&all_assignments))
+        .try_collect()?;
+
+    let reports = report_unmatched_many_assignments(&assignments, &course_client).await;
     pin_mut!(reports);
 
     let mut writer = csv::Writer::from_path(out_path)?;
-    println!("Reports:");
+    info!("Generating reports");
     while let Some(report) = reports.next().await {
         match report {
             Ok(report) => {
                 let record = UnmatchedReportRecord::new(report);
                 writer.serialize(record)?;
-                // use std::io::Write;
-                // println!("{report}");
-                // println!("{}", report.page_matching_link());
-                // println!("{}", report.csv_string());
-                // writeln!(&mut file, "{}", report.csv_string())?;
             }
             Err(err) => {
-                eprintln!("error!");
-                eprintln!("{err:?}");
+                error!(%err, "Error while identifying unmatched submissions");
             }
         }
-        println!("\n----------\n");
     }
-    println!();
 
     Ok(())
 }

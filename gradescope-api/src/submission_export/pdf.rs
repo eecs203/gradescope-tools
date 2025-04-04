@@ -8,12 +8,13 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
-use nom::character::complete::{anychar, char, digit1, multispace0};
+use nom::character::complete::{anychar, char, digit1, multispace0, satisfy};
 use nom::combinator::{eof, map_res};
 use nom::error::ParseError;
 use nom::multi::{many_till, many0, separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::{AsChar, IResult, InputIter, InputLength, Parser, Slice};
+use tracing::error;
 
 use crate::question::{Question, QuestionNumber};
 use crate::submission::SubmissionId;
@@ -90,11 +91,15 @@ impl SubmissionPdf {
     /// whitespace.
     ///
     /// So, the text we're parsing is a string of all text in the PDF, with all whitespace removed.
-    #[tracing::instrument(level = "trace", skip(self))]
+    #[tracing::instrument(level = "trace", skip(self), fields(submission_id = %self.submission_id))]
     pub fn matched_question_numbers(&self) -> Result<Vec<QuestionNumber>> {
         pdf_text(&self.text)
             .map(|(_, question_nums)| question_nums)
-            .map_err(|err| anyhow!("could not parse question numbers from PDF text: {err}"))
+            .map_err(|err| {
+                let submission_id = &self.submission_id;
+                error!("could not parse question numbers from PDF: {submission_id}");
+                anyhow!("could not parse question numbers from PDF text: {err}")
+            })
     }
 }
 
@@ -103,7 +108,7 @@ fn pdf_text(text: &str) -> IResult<&str, Vec<QuestionNumber>> {
         // "Total Points" appears near the top of each PDF
         skip_thru(tag_ws("Total Points")),
         questions,
-        eof,
+        tuple((many0(satisfy(|c| !c.is_ascii())), eof)),
     )(text)
 }
 

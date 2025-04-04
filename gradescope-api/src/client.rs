@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -44,17 +45,14 @@ selectors! {
 #[derive(Debug)]
 pub struct Client<Service> {
     service: Mutex<Service>,
+    cache_path: PathBuf,
 }
 
-pub async fn client(creds: Creds) -> Result<Client<impl GsService>> {
+pub async fn client(creds: Creds, cache_path: PathBuf) -> Result<Client<impl GsService>> {
     Ok(Client {
         service: Mutex::new(gs_service::service(creds).await?),
+        cache_path,
     })
-}
-
-pub async fn client_from_env() -> Result<Client<impl GsService>> {
-    let creds = Creds::from_env()?;
-    client(creds).await
 }
 
 impl<Service: GsService> Client<Service> {
@@ -72,6 +70,10 @@ impl<Service: GsService> Client<Service> {
             .await?
             .call(request.into())
             .await
+    }
+
+    pub fn get_cache_path(&self) -> &Path {
+        &self.cache_path
     }
 
     pub async fn get_courses(&self) -> Result<Vec<Course>> {
@@ -283,7 +285,7 @@ impl<Service: GsService> Client<Service> {
     }
 
     // TODO: reimplement checking/getting path
-    pub async fn export_submissions(
+    pub async fn submission_export_response(
         &self,
         course: &Course,
         assignment: &Assignment,

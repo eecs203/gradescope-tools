@@ -1,14 +1,17 @@
-use std::fmt;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::{fmt, fs};
 
 use anyhow::Result;
-use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, serde_conv};
 
+use crate::client::Client;
 use crate::course::{Course, CourseClient};
 use crate::question::Outline;
 use crate::services::gs_service::GsService;
 use crate::submission::SubmissionToStudentMap;
+use crate::submission_export::{SubmissionExport, load_submissions_export_from_fs};
 use crate::types::Points;
 
 #[serde_as]
@@ -61,15 +64,59 @@ impl<'a, Service: GsService> AssignmentClient<'a, Service> {
         self.assignment
     }
 
-    pub async fn export_submissions(&self) -> Result<Response> {
-        let gradescope = self.course_client.gradescope();
-        let course = self.course_client.course();
+    fn gradescope(&self) -> &'a Client<Service> {
+        self.course_client.gradescope()
+    }
 
-        let response = gradescope
-            .export_submissions(course, self.assignment)
+    pub fn get_cache_path(&self) -> &Path {
+        self.course_client.get_cache_path()
+    }
+
+    /// The path on the filesystem where the submission export for this assignment is/will be cached
+    pub fn get_submission_export_path(&self) -> PathBuf {
+        let course = self.course().name();
+        let name = self.assignment().name().as_str();
+        self.get_cache_path()
+            .join(format!("{course}-{name}-export.zip"))
+    }
+
+    /// Once the submission export has been cached to the filesystem, load it into a usable object
+    pub async fn load_submission_export_from_fs(
+        &self,
+    ) -> Result<impl SubmissionExport + use<Service>> {
+        load_submissions_export_from_fs(self.get_submission_export_path()).await
+    }
+
+    /// Get the path on the filesystem to the submissions export, possibly exporting the submissions
+    /// if not already present.
+    pub async fn ensure_submissions_export_on_fs(&self) -> Result<PathBuf> {
+        let path = self.get_submission_export_path();
+        if path.exists() {
+            // The export is already in cache
+            return Ok(path);
+        }
+
+        self.export_submissions_to_fs().await
+    }
+
+    /// Export the submissions and save them to the filesystem
+    async fn export_submissions_to_fs(&self) -> Result<PathBuf> {
+        let mut submissions_response = self
+            .gradescope()
+            .submission_export_response(self.course(), self.assignment())
             .await?;
 
-        Ok(response)
+        let path = self.get_submission_export_path();
+        let tmp_path = path.with_extension("tmp");
+        let mut file = fs::File::create(&tmp_path)?;
+
+        while let Some(data) = submissions_response.chunk().await? {
+            file.write_all(&data)?;
+        }
+
+        std::fs::rename(tmp_path, &path)?;
+
+        Ok(path)
     }
 
     pub async fn outline(&self) -> Result<Outline> {

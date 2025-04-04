@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::Path;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -60,6 +61,10 @@ impl<Service> Copy for CourseClient<'_, Service> {}
 impl<'a, Service: GsService> CourseClient<'a, Service> {
     pub fn new(gradescope: &'a Client<Service>, course: &'a Course) -> Self {
         Self { gradescope, course }
+    }
+
+    pub fn get_cache_path(&self) -> &Path {
+        self.gradescope.get_cache_path()
     }
 
     pub async fn get_assignments(&self) -> Result<Vec<Assignment>> {

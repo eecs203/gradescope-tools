@@ -16,7 +16,9 @@ use self::pdf::{SubmissionPdf, SubmissionPdfStream};
 
 pub mod pdf;
 
-pub async fn submissions_export_load(path: impl AsRef<Path>) -> Result<impl SubmissionExport> {
+pub async fn load_submissions_export_from_fs(
+    path: impl AsRef<Path>,
+) -> Result<impl SubmissionExport> {
     Ok(tokio::fs::File::open(path).await?.compat())
 }
 
