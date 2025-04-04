@@ -1,13 +1,30 @@
+use anyhow::{Context, Result};
 use scraper::ElementRef;
 
 use crate::assignment::Assignment;
 use crate::course::Course;
 
+#[macro_export]
+macro_rules! selectors {
+    ($name:ident = $x:expr $(,)?) => {
+        ::lazy_static::lazy_static! { static ref $name: scraper::Selector = scraper::Selector::parse($x).unwrap(); }
+    };
+
+    ($name:ident = $x:expr, $($names:ident = $xs:expr),+ $(,)?) => {
+        selectors! { $name = $x }
+        selectors! {
+            $($names = $xs),+
+        }
+    };
+}
+
+pub const BASE_DOMAIN: &str = "www.gradescope.com";
 pub const BASE_URL: &str = "https://www.gradescope.com";
 pub const LOGIN_PATH: &str = "/login";
 pub const ACCOUNT_PATH: &str = "/account";
 pub const ASSIGNMENTS_COURSE_PATH: &str = "/assignments";
 pub const REGRADES_ASSIGNMENT_PATH: &str = "/regrade_requests";
+pub const OUTLINE_ASSIGNMENT_PATH: &str = "/outline/edit";
 
 pub fn gs_url(path: &str) -> String {
     format!("{BASE_URL}{path}")
@@ -21,14 +38,24 @@ pub fn gs_assignment_path(course: &Course, assignment: &Assignment, path: &str) 
     gs_course_path(course, &format!("/assignments/{}{path}", assignment.id()))
 }
 
+pub fn gs_manage_submissions_path(course: &Course, assignment: &Assignment) -> String {
+    gs_assignment_path(course, assignment, "/submissions")
+}
+
+pub fn gs_review_grades_path(course: &Course, assignment: &Assignment) -> String {
+    gs_assignment_path(course, assignment, "/review_grades")
+}
+
 pub fn text(el: ElementRef) -> String {
     el.text().flat_map(|text| text.chars()).collect()
 }
 
-pub fn id_from_link(link: ElementRef) -> Option<String> {
+pub fn id_from_link(link: ElementRef) -> Result<String> {
     link.value()
-        .attr("href")?
+        .attr("href")
+        .context("could not get id from link: no href attribute found")?
         .split('/')
-        .last()
+        .next_back()
+        .context("could not get id from link: href did not have a last component")
         .map(ToOwned::to_owned)
 }

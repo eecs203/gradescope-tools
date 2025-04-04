@@ -1,34 +1,29 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
-use itertools::Itertools;
-use lazy_static::lazy_static;
-use reqwest::redirect::Policy;
-use reqwest::{Client as HttpClient, Response};
-use scraper::{ElementRef, Html};
+use anyhow::{Context, Result, anyhow, bail};
+use itertools::{Either, Itertools};
+use reqwest::{Method, Response};
+use scraper::{CaseSensitivity, Element, ElementRef, Html};
+use serde::Deserialize;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
+use tower::{Service, ServiceExt};
+use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::assignment::{Assignment, AssignmentName};
-use crate::course::{Course, Role};
+use crate::assignment::{Assignment, AssignmentsTableProps};
+use crate::course::{Course, CourseId, Role};
 use crate::creds::Creds;
+use crate::question::{AssignmentOutline, Outline, QuestionTitle};
 use crate::regrade::Regrade;
-use crate::types::{GraderName, Points, QuestionNumber, QuestionTitle, StudentName};
+use crate::selectors;
+use crate::services::gs_service::{self, GsRequest, GsService, HtmlRequest};
+use crate::submission::SubmissionsManagerProps;
+use crate::types::{GraderName, StudentName};
 use crate::util::*;
-
-macro_rules! selectors {
-    ($name:ident = $x:expr) => {
-        lazy_static! { static ref $name: scraper::Selector = scraper::Selector::parse($x).unwrap(); }
-    };
-
-    ($name:ident = $x:expr, $($names:ident = $xs:expr),+) => {
-        selectors! { $name = $x }
-        selectors! {
-            $($names = $xs),+
-        }
-    };
-}
 
 selectors! {
     AUTHENTICITY_TOKEN = "form[action='/login'] input[name=authenticity_token]",
@@ -39,128 +34,84 @@ selectors! {
     ASSIGNMENT_ROW = "tr.js-assignmentTableAssignmentRow",
     TD = "td",
     A = "a",
-    REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr"
+    REGRADE_ROW = "table.js-regradeRequestsTable > tbody > tr",
+    BULK_EXPORT_A = ".js-bulkExportModalDownload",
+    SUBMISSIONS_MANAGER = "#main-content > [data-react-class=SubmissionsManager]",
+    ASSIGNMENTS_TABLE = "[data-react-class=AssignmentsTable]",
+    ASSIGNMENT_OUTLINE = "[data-react-class=AssignmentOutline]",
+    CSRF_TOKEN_META = "meta[name='csrf-token']",
 }
 
-pub struct Client<State: ClientState> {
-    client: HttpClient,
-    creds: Creds,
-    _state: State,
+#[derive(Debug)]
+pub struct Client<Service> {
+    service: Mutex<Service>,
+    cache_path: PathBuf,
 }
 
-impl<State: ClientState> Client<State> {
-    async fn get_gs_html(&self, path: &str) -> Result<Html> {
-        let text = self.get_gs_response(path).await?.text().await?;
-        Ok(Html::parse_document(&text))
+pub async fn client(creds: Creds, cache_path: PathBuf) -> Result<Client<impl GsService>> {
+    Ok(Client {
+        service: Mutex::new(gs_service::service(creds).await?),
+        cache_path,
+    })
+}
+
+impl<Service: GsService> Client<Service> {
+    async fn request(&self, request: GsRequest) -> Result<Response> {
+        self.service.lock().await.ready().await?.call(request).await
     }
 
-    async fn get_gs_response(&self, path: &str) -> Result<Response> {
-        sleep(Duration::from_millis(1000)).await;
-
-        let url = gs_url(path);
-        println!("sending request to {url}");
-
-        self.client
-            .get(url)
-            .send()
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn html_request(&self, request: impl Into<HtmlRequest> + Debug) -> Result<Html> {
+        self.service
+            .lock()
             .await
-            .context("Gradescope request failed")?
-            .error_for_status()
-            .context("Gradescope responded with an error")
-    }
-}
-
-impl Client<Init> {
-    pub async fn from_env() -> Result<Self> {
-        let creds = Creds::from_env()?;
-        Client::new(creds).await
-    }
-
-    pub async fn new(creds: Creds) -> Result<Self> {
-        let client = HttpClient::builder()
-            .cookie_store(true)
-            .redirect(Policy::none())
-            .build()?;
-
-        // init cookies
-        client.get(BASE_URL).send().await?;
-
-        Ok(Self {
-            client,
-            creds,
-            _state: Init,
-        })
-    }
-
-    pub async fn login(self) -> Result<Client<Auth>> {
-        let authenticity_token = self.get_authenticity_token().await?;
-
-        let login_data = {
-            let mut login_data = HashMap::new();
-            login_data.insert("utf8", "✓");
-            login_data.insert("session[email]", self.creds.email());
-            login_data.insert("session[password]", self.creds.password());
-            login_data.insert("session[remember_me]", "0");
-            login_data.insert("commit", "Log In");
-            login_data.insert("session[remember_me_sso]", "0");
-            login_data.insert("authenticity_token", &authenticity_token);
-            login_data
-        };
-
-        let response = self
-            .client
-            .post(gs_url(LOGIN_PATH))
-            .form(&login_data)
-            .send()
-            .await?;
-
-        if response.status().is_redirection() {
-            Ok(Client {
-                client: self.client,
-                creds: self.creds,
-                _state: Auth,
-            })
-        } else {
-            bail!("authentication failed")
-        }
-    }
-
-    async fn get_authenticity_token(&self) -> Result<String> {
-        self.get_gs_html(LOGIN_PATH)
+            .as_html_service()
+            .ready()
             .await?
-            .select(&AUTHENTICITY_TOKEN)
-            .next()
-            .and_then(|el| el.value().attr("value"))
-            .context("could not find `authenticity_token`")
-            .map(|token| token.to_owned())
+            .call(request.into())
+            .await
     }
-}
 
-impl Client<Auth> {
-    pub async fn get_courses(&self) -> Result<(Vec<Course>, Vec<Course>)> {
-        let account_page = self.get_gs_html(ACCOUNT_PATH).await?;
+    pub fn get_cache_path(&self) -> &Path {
+        &self.cache_path
+    }
+
+    pub async fn get_courses(&self) -> Result<Vec<Course>> {
+        let account_page = self.html_request(ACCOUNT_PATH).await?;
         let course_list_headings = account_page
             .select(&COURSE_LIST_HEADING)
             .filter_map(|el| {
-                el.next_sibling()
-                    .and_then(ElementRef::wrap)
+                el.next_siblings()
+                    .filter_map(ElementRef::wrap)
+                    .find(|sib| {
+                        sib.has_class(&("courseList".into()), CaseSensitivity::CaseSensitive)
+                    })
                     .map(|list| (text(el), list))
             })
             .collect::<HashMap<_, _>>();
 
-        let instructor_course_list = course_list_headings.get("Instructor Courses");
-        let student_course_list = course_list_headings.get("Student Courses");
+        let heading_account_types = [
+            // Accounts that are students in some class(es) and instructors in some class(es) have
+            // headings to differentiate classes by role
+            ("Instructor Courses", Role::Instructor),
+            ("Student Courses", Role::Student),
+            // Accounts with only one role don't need to differentiate. We assume users are
+            // instructors, so the role should be instructor.
+            // TODO: properly handle student users?
+            ("Your Courses", Role::Instructor),
+        ];
 
-        let instructor_courses = instructor_course_list
-            .into_iter()
-            .flat_map(|list| Self::parse_courses(*list, Role::Instructor))
-            .collect();
-        let student_courses = student_course_list
-            .into_iter()
-            .flat_map(|list| Self::parse_courses(*list, Role::Student))
+        let courses = heading_account_types
+            .iter()
+            .flat_map(|(heading, role)| {
+                course_list_headings
+                    .get(*heading)
+                    .into_iter()
+                    .flat_map(|list| Self::parse_courses(*list, *role))
+            })
             .collect();
 
-        Ok((instructor_courses, student_courses))
+        Ok(courses)
     }
 
     fn parse_courses(list: ElementRef, user_role: Role) -> impl Iterator<Item = Course> + '_ {
@@ -169,37 +120,36 @@ impl Client<Auth> {
     }
 
     fn parse_course(course_box: ElementRef, user_role: Role) -> Option<Course> {
-        let id = id_from_link(course_box)?;
+        let id = CourseId::new(id_from_link(course_box).ok()?);
         let short_name = text(course_box.select(&COURSE_SHORT_NAME).next()?);
         let name = text(course_box.select(&COURSE_NAME).next()?);
         Some(Course::new(id, short_name, name, user_role))
     }
 
+    #[tracing::instrument(skip(self), ret, err)]
     pub async fn get_assignments(&self, course: &Course) -> Result<Vec<Assignment>> {
         let assignments_page = self
-            .get_gs_html(&gs_course_path(course, ASSIGNMENTS_COURSE_PATH))
+            .html_request(gs_course_path(course, ASSIGNMENTS_COURSE_PATH))
             .await?;
 
-        let assignments = assignments_page
-            .select(&ASSIGNMENT_ROW)
-            .filter_map(Self::parse_assignment)
-            .collect();
+        let assignments_table = assignments_page
+            .select(&ASSIGNMENTS_TABLE)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!(
+                    "not exactly one assignments table: found {}",
+                    err_it.count()
+                )
+            })?;
+        let assignments_table_data = assignments_table
+            .value()
+            .attr("data-react-props")
+            .context("missing assignments table data")?;
 
-        Ok(assignments)
-    }
+        let assignments_table_props: AssignmentsTableProps =
+            serde_json::from_str(assignments_table_data)?;
 
-    fn parse_assignment(row: ElementRef) -> Option<Assignment> {
-        let mut entries = row.select(&TD);
-
-        let name_entry = entries.next()?;
-        let id = id_from_link(name_entry.select(&A).next()?)?;
-        let name = AssignmentName::new(text(name_entry));
-
-        let points_entry = entries.next()?;
-        let points_value = text(points_entry).parse().ok()?;
-        let points = Points::new(points_value).ok()?;
-
-        Some(Assignment::new(id, name, points))
+        Ok(assignments_table_props.assignments)
     }
 
     pub async fn get_regrades(
@@ -208,7 +158,7 @@ impl Client<Auth> {
         assignment: &Assignment,
     ) -> Result<Vec<Regrade>> {
         let regrade_page = self
-            .get_gs_html(&gs_assignment_path(
+            .html_request(gs_assignment_path(
                 course,
                 assignment,
                 REGRADES_ASSIGNMENT_PATH,
@@ -236,7 +186,9 @@ impl Client<Auth> {
         let (question_number_text, question_title_text) = question_entry_text
             .split_once(':')
             .with_context(|| format!("couldn't split question entry \"{question_entry_text}\""))?;
-        let question_number = QuestionNumber::new(question_number_text.to_owned());
+        let question_number = question_number_text
+            .parse()
+            .context("could not parse question number")?;
         let question_title = QuestionTitle::new(question_title_text.to_owned());
 
         let grader_entry = entries.next().context("missing grader entry")?;
@@ -264,11 +216,265 @@ impl Client<Auth> {
             completed,
         ))
     }
+
+    pub async fn get_outline(&self, course: &Course, assignment: &Assignment) -> Result<Outline> {
+        let outline_page = self
+            .html_request(gs_assignment_path(
+                course,
+                assignment,
+                OUTLINE_ASSIGNMENT_PATH,
+            ))
+            .await?;
+
+        let outline_elt = outline_page
+            .select(&ASSIGNMENT_OUTLINE)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!(
+                    "not exactly one assignment outline element: found {}",
+                    err_it.count()
+                )
+            })?;
+        let outline_data = outline_elt
+            .value()
+            .attr("data-react-props")
+            .context("missing assignment outline data")?;
+
+        let assignment_outline: AssignmentOutline = serde_json::from_str(outline_data)?;
+
+        Ok(assignment_outline.outline)
+    }
+
+    pub async fn get_submissions_metadata(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<SubmissionsManagerProps> {
+        let manage_submissions_page = self
+            .html_request(gs_manage_submissions_path(course, assignment))
+            .await
+            .context("cannot get \"manage submissions\" page")?;
+
+        let submissions_manager = manage_submissions_page
+            .select(&SUBMISSIONS_MANAGER)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!(
+                    "not exactly one submissions manager: found {}",
+                    err_it.count()
+                )
+            })?;
+        let submissions_manager_data = submissions_manager
+            .value()
+            .attr("data-react-props")
+            .context("missing submission manager data")?;
+
+        let submissions_manager_props: SubmissionsManagerProps =
+            serde_json::from_str(submissions_manager_data)
+                .context("could not parse submissions manager data")?;
+
+        if assignment.id() != submissions_manager_props.assignment_id() {
+            bail!(
+                "assignment id is `{}`, but the submissions manager is for assignment id `{}`",
+                assignment.id(),
+                submissions_manager_props.assignment_id()
+            );
+        }
+
+        Ok(submissions_manager_props)
+    }
+
+    // TODO: reimplement checking/getting path
+    pub async fn submission_export_response(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<Response> {
+        let path = self.exported_submissions_path(course, assignment).await?;
+        let response = self
+            .request(
+                GsRequest::new_direct(Method::GET, path).with_timeout(Duration::from_secs(60 * 60)),
+            )
+            .await?;
+        Ok(response)
+    }
+
+    /// Get the path to the exported submissions
+    async fn exported_submissions_path(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+    ) -> Result<String> {
+        // `Html` is non-`Send`, and Rust complains if it's not dropped before an await point. The
+        // function should be correct without this block, but the compiler can't tell.
+        let result = {
+            let review_grades_page = self
+                .html_request(gs_review_grades_path(course, assignment))
+                .await
+                .context("getting review grades")?;
+
+            let export_download_href = Self::export_download_href(&review_grades_page)?;
+            debug!(?export_download_href);
+
+            match export_download_href {
+                Some(path) => {
+                    info!("submissions were already exported");
+                    Either::Left(path.to_owned())
+                }
+                None => {
+                    info!("must request export");
+
+                    let csrf_token = Self::csrf_token_from_meta(&review_grades_page)?;
+                    debug!(csrf_token);
+
+                    Either::Right(csrf_token.to_owned())
+                }
+            }
+        };
+
+        match result {
+            Either::Left(path) => Ok(path),
+            Either::Right(csrf_token) => {
+                self.request_export_submissions(course, assignment, csrf_token)
+                    .await
+            }
+        }
+    }
+
+    fn export_download_href(review_grades_page: &Html) -> Result<Option<&str>> {
+        let export_download_a = review_grades_page
+            .select(&BULK_EXPORT_A)
+            .exactly_one()
+            .map_err(|err_it| anyhow!("not exactly one export link: found {}", err_it.count()))?;
+
+        let href = export_download_a.value().attr("href").and_then(|href| {
+            if href != "javascript:void(0);" {
+                Some(href)
+            } else {
+                None
+            }
+        });
+
+        Ok(href)
+    }
+
+    fn csrf_token_from_meta(review_grades_page: &Html) -> Result<&str> {
+        let csrf_token_meta = review_grades_page
+            .select(&CSRF_TOKEN_META)
+            .exactly_one()
+            .map_err(|err_it| {
+                anyhow!("not exactly one CSRF token meta: found {}", err_it.count())
+            })?;
+
+        let csrf_token = csrf_token_meta
+            .value()
+            .attr("content")
+            .ok_or_else(|| anyhow!("could not get CSRF token from meta: {csrf_token_meta:?}"))?;
+
+        Ok(csrf_token)
+    }
+
+    /// Requests and waits for Gradescope to export submissions, returning the path to the export if
+    /// successful. This can take substantial time (i.e. easily >10 minutes).
+    async fn request_export_submissions(
+        &self,
+        course: &Course,
+        assignment: &Assignment,
+        csrf_token: String,
+    ) -> Result<String> {
+        let path = gs_assignment_path(course, assignment, "/export");
+        let response = self
+            .request(GsRequest::new_ajax(Method::POST, path, csrf_token.clone()))
+            .await?;
+
+        let status_path = response
+            .json::<ExportSubmissionsResponse>()
+            .await?
+            .status_path(course);
+
+        self.await_export_completion(course, &status_path, csrf_token)
+            .await
+    }
+
+    #[tracing::instrument(skip(self, csrf_token), err, ret)]
+    async fn await_export_completion(
+        &self,
+        course: &Course,
+        status_path: &str,
+        csrf_token: String,
+    ) -> Result<String> {
+        loop {
+            let response = self
+                .request(GsRequest::new_ajax(
+                    Method::GET,
+                    status_path.to_owned(),
+                    csrf_token.clone(),
+                ))
+                .await?;
+
+            let status = response.json::<ExportSubmissionsStatus>().await?;
+
+            if status.completed() {
+                info!("export complete!");
+
+                // Gradescope claims to be complete before the file is ready in S3, so wait a bit
+                tokio::time::sleep(Duration::from_secs(60)).await;
+
+                break Ok(status.download_path(course));
+            }
+
+            info!(
+                progress = status.progress(),
+                status = status.status(),
+                "still waiting on export..."
+            );
+            sleep(Duration::from_secs(10)).await;
+        }
+    }
 }
 
-pub struct Init;
-pub struct Auth;
+#[derive(Deserialize)]
+struct ExportSubmissionsResponse {
+    generated_file_id: u64,
+}
 
-pub trait ClientState {}
-impl ClientState for Init {}
-impl ClientState for Auth {}
+impl ExportSubmissionsResponse {
+    pub fn status_path(&self, course: &Course) -> String {
+        gs_course_path(
+            course,
+            &format!("/generated_files/{}.json", self.generated_file_id),
+        )
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportSubmissionsStatus {
+    id: u64,
+    progress: f32,
+    status: String,
+}
+
+impl ExportSubmissionsStatus {
+    pub fn completed(&self) -> bool {
+        match self.status.as_str() {
+            "unprocessed" | "processing" => false,
+            "completed" => true,
+            status => {
+                warn!(%status, complete_status = ?self, "unexpected export status");
+                false
+            }
+        }
+    }
+
+    pub fn download_path(&self, course: &Course) -> String {
+        gs_course_path(course, &format!("/generated_files/{}.zip", self.id))
+    }
+
+    pub fn progress(&self) -> f32 {
+        self.progress
+    }
+
+    pub fn status(&self) -> &str {
+        &self.status
+    }
+}
