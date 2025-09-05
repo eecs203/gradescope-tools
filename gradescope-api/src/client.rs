@@ -105,7 +105,7 @@ impl<Service: GsService> Client<Service> {
             // Accounts with only one role don't need to differentiate. We assume users are
             // instructors, so the role should be instructor.
             // TODO: properly handle student users?
-            ("Your Courses", Role::Instructor),
+            ("", Role::Instructor),
         ];
 
         let courses = heading_account_types
