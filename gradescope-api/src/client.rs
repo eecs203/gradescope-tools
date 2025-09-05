@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tokio::time::sleep;
 use tower::{Service, ServiceExt};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use url::Url;
 
 use crate::assignment::{Assignment, AssignmentsTableProps};
@@ -76,9 +76,10 @@ impl<Service: GsService> Client<Service> {
         &self.cache_path
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub async fn get_courses(&self) -> Result<Vec<Course>> {
         let account_page = self.html_request(ACCOUNT_PATH).await?;
-        let course_list_headings = account_page
+        let course_lists_by_headings = account_page
             .select(&COURSE_LIST_HEADING)
             .filter_map(|el| {
                 el.next_siblings()
@@ -89,6 +90,12 @@ impl<Service: GsService> Client<Service> {
                     .map(|list| (text(el), list))
             })
             .collect::<HashMap<_, _>>();
+
+        let course_list_headings = course_lists_by_headings.keys().collect_vec();
+        trace!(headings = ?course_list_headings, "Got course list headings");
+        if course_list_headings.is_empty() {
+            warn!("Could not get any course list headings");
+        }
 
         let heading_account_types = [
             // Accounts that are students in some class(es) and instructors in some class(es) have
@@ -102,14 +109,19 @@ impl<Service: GsService> Client<Service> {
         ];
 
         let courses = heading_account_types
-            .iter()
+            .into_iter()
             .flat_map(|(heading, role)| {
-                course_list_headings
-                    .get(*heading)
+                course_lists_by_headings
+                    .get(heading)
                     .into_iter()
-                    .flat_map(|list| Self::parse_courses(*list, *role))
+                    .flat_map(move |list| {
+                        trace!(heading, "Getting courses under heading");
+                        Self::parse_courses(*list, role)
+                    })
             })
             .collect();
+
+        trace!(?courses, "Got courses");
 
         Ok(courses)
     }
