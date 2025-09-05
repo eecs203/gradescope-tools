@@ -17,7 +17,7 @@ impl<T> RateLimited<T> {
         }
     }
 
-    pub async fn get(&self) -> MutexGuard<T> {
+    pub async fn get(&'_ self) -> MutexGuard<'_, T> {
         let guard = self.t.lock().await;
         sleep(self.delay).await;
         guard

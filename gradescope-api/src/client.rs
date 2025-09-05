@@ -126,7 +126,7 @@ impl<Service: GsService> Client<Service> {
         Ok(courses)
     }
 
-    fn parse_courses(list: ElementRef, user_role: Role) -> impl Iterator<Item = Course> + '_ {
+    fn parse_courses(list: ElementRef, user_role: Role) -> impl Iterator<Item = Course> {
         list.select(&COURSE)
             .filter_map(move |course_box| Self::parse_course(course_box, user_role))
     }
